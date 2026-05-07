@@ -363,35 +363,11 @@ static void run_entrance_animations(void) {
 
 static void main_window_load(Window *window) {
   Layer *root = window_get_root_layer(window);
-  GRect bounds = layer_get_bounds(root);
+  GRect bounds = layer_get_unobstructed_bounds(root);
 
-  const int half_w = bounds.size.w / 2;
-  const int round_inset = PBL_IF_ROUND_ELSE(10, 0);
-  const int outer_pad = 4;
-  const int box_h = TIME_BOX_H;
-  const int widget_h = 28;
-  const int date_h = 22;
-  const int stack_w = 60;
-  const int intra_gap = 2;
-  const int stack_h = ICON_SIZE + intra_gap + widget_h;
-  const int center_pad = 20;
-  const int stack_x = half_w - center_pad - stack_w;
-  const int stack_icon_x = stack_x + (stack_w - ICON_SIZE) / 2;
-
-  GRect time_rect = GRect(half_w + outer_pad,
-                          (bounds.size.h - box_h) / 2,
-                          half_w - 2 * outer_pad - round_inset,
-                          box_h);
-  s_time_box_layer = layer_create(time_rect);
-  layer_set_update_proc(s_time_box_layer, time_box_update_proc);
-  layer_add_child(root, s_time_box_layer);
-
-  GRect date_rect = GRect(time_rect.origin.x,
-                          time_rect.origin.y + box_h + 2,
-                          time_rect.size.w,
-                          date_h);
-  s_date_layer = make_text_layer(date_rect, GTextAlignmentCenter, FONT_KEY_GOTHIC_18_BOLD, s_color_time);
-  layer_add_child(root, text_layer_get_layer(s_date_layer));
+  // Safe content area: bigger inset on round to clear the curved corners,
+  // small inset on rect to give the steps progress pill room to breathe.
+  GRect content = grect_inset(bounds, GEdgeInsets(PBL_IF_ROUND_ELSE(20, 4)));
 
   time_t now_t = time(NULL);
   HealthServiceAccessibilityMask hr_mask = health_service_metric_accessible(
@@ -404,14 +380,57 @@ static void main_window_load(Window *window) {
     s_hr_bmp = load_themed_icon(s_theme, RESOURCE_ID_ICON_HEART_DARK, RESOURCE_ID_ICON_HEART_LIGHT);
   }
 
-  const int widget_gap  = 50;
-  const int group_h     = s_hr_available ? (2 * stack_h + widget_gap) : stack_h;
-  const int steps_y     = (bounds.size.h - group_h) / 2;
-  const int hr_y        = steps_y + stack_h + widget_gap;
+  // Two columns inside `content`: a fixed-width widget column on the left
+  // (icon-sized) and the time/date column filling whatever's left on the
+  // right. Edge-anchored so the layout stretches with the screen.
+  const int16_t widget_h = 28;
+  const int16_t date_h = 22;
+  const int16_t intra_gap = 2;
+  const int16_t stack_h = ICON_SIZE + intra_gap + widget_h;
+  const int16_t left_col_w = 60;
+  const int16_t col_gap = 6;
+  const int16_t left_x = content.origin.x;
+  const int16_t right_x = left_x + left_col_w + col_gap;
+  const int16_t right_col_w = content.origin.x + content.size.w - right_x;
+  const int16_t stack_icon_x = left_x + (left_col_w - ICON_SIZE) / 2;
 
-  const int weather_y = time_rect.origin.y - widget_h - 6;
-  s_weather_target_frame = GRect(time_rect.origin.x, weather_y,
-                                 time_rect.size.w, widget_h);
+  // Time pill — vertically centered in the content rect.
+  const int16_t box_h = TIME_BOX_H;
+  GRect time_rect = GRect(right_x,
+                          content.origin.y + (content.size.h - box_h) / 2,
+                          right_col_w,
+                          box_h);
+  s_time_box_layer = layer_create(time_rect);
+  layer_set_update_proc(s_time_box_layer, time_box_update_proc);
+  layer_add_child(root, s_time_box_layer);
+
+  // Date — directly under the time pill.
+  GRect date_rect = GRect(time_rect.origin.x,
+                          time_rect.origin.y + box_h + 2,
+                          time_rect.size.w,
+                          date_h);
+  s_date_layer = make_text_layer(date_rect, GTextAlignmentCenter, FONT_KEY_GOTHIC_18_BOLD, s_color_time);
+  layer_add_child(root, text_layer_get_layer(s_date_layer));
+
+  // Vertical positioning of the left widget column. Group is centered in
+  // `content`. Gap between Steps and HR adapts to the available height so
+  // small displays don't push Steps off the top.
+  int16_t widget_gap = 0;
+  if (s_hr_available) {
+    int16_t free_h = content.size.h - 2 * stack_h;
+    widget_gap = free_h / 2;
+    if (widget_gap < 20) widget_gap = 20;
+    if (widget_gap > 50) widget_gap = 50;
+  }
+  const int16_t group_h = s_hr_available ? (2 * stack_h + widget_gap) : stack_h;
+  const int16_t steps_y = content.origin.y + (content.size.h - group_h) / 2;
+  const int16_t hr_y = steps_y + stack_h + widget_gap;
+
+  // Weather — anchored just above the time pill.
+  s_weather_target_frame = GRect(time_rect.origin.x,
+                                 time_rect.origin.y - widget_h - 6,
+                                 time_rect.size.w,
+                                 widget_h);
   GRect weather_off = GRect(time_rect.origin.x, -widget_h - 4,
                             time_rect.size.w, widget_h);
   strcpy(s_weather_buffer, "...");
@@ -422,15 +441,15 @@ static void main_window_load(Window *window) {
 
   s_steps_bmp_layer = make_icon_layer(GRect(stack_icon_x, steps_y, ICON_SIZE, ICON_SIZE), s_steps_bmp);
   layer_add_child(root, bitmap_layer_get_layer(s_steps_bmp_layer));
-  s_steps_layer = make_text_layer(GRect(stack_x, steps_y + ICON_SIZE + intra_gap, stack_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
+  s_steps_layer = make_text_layer(GRect(left_x, steps_y + ICON_SIZE + intra_gap, left_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
   layer_add_child(root, text_layer_get_layer(s_steps_layer));
 
-  const int progress_pad = 8;
-  const int stroke_allowance = 2;
-  const int total_pad = progress_pad + stroke_allowance;
-  GRect steps_progress_rect = GRect(stack_x - total_pad,
+  const int16_t progress_pad = 8;
+  const int16_t stroke_allowance = 2;
+  const int16_t total_pad = progress_pad + stroke_allowance;
+  GRect steps_progress_rect = GRect(left_x - total_pad,
                                     steps_y - total_pad,
-                                    stack_w + 2 * total_pad,
+                                    left_col_w + 2 * total_pad,
                                     stack_h + 2 * total_pad);
   s_steps_progress_layer = layer_create(steps_progress_rect);
   layer_set_update_proc(s_steps_progress_layer, steps_progress_update_proc);
@@ -439,7 +458,7 @@ static void main_window_load(Window *window) {
   if (s_hr_available) {
     s_hr_bmp_layer = make_icon_layer(GRect(stack_icon_x, hr_y, ICON_SIZE, ICON_SIZE), s_hr_bmp);
     layer_add_child(root, bitmap_layer_get_layer(s_hr_bmp_layer));
-    s_hr_layer = make_text_layer(GRect(stack_x, hr_y + ICON_SIZE + intra_gap, stack_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_hr);
+    s_hr_layer = make_text_layer(GRect(left_x, hr_y + ICON_SIZE + intra_gap, left_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_hr);
     layer_add_child(root, text_layer_get_layer(s_hr_layer));
   }
 
