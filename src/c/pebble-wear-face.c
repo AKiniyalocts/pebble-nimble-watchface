@@ -3,7 +3,8 @@
 static Window *s_main_window;
 
 static Layer *s_time_box_layer;
-static char s_time_buffer[8];
+static char s_hour_buffer[4];
+static char s_minute_buffer[4];
 
 static TextLayer *s_date_layer;
 static char s_date_buffer[16];
@@ -34,7 +35,8 @@ static bool s_animate_seconds = true;
 
 #define ICON_SIZE 28
 #define ICON_GAP  4
-#define TIME_BOX_H 50
+#define TIME_BOX_H 96
+#define TIME_BOX_W 80
 #define DEFAULT_STEP_GOAL 10000
 
 #define THEME_DARK 0
@@ -96,8 +98,9 @@ static void apply_theme(int theme) {
 static void update_time(void) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  const char *fmt = clock_is_24h_style() ? "%H:%M" : "%I:%M";
-  strftime(s_time_buffer, sizeof(s_time_buffer), fmt, t);
+  strftime(s_hour_buffer, sizeof(s_hour_buffer),
+           clock_is_24h_style() ? "%H" : "%I", t);
+  strftime(s_minute_buffer, sizeof(s_minute_buffer), "%M", t);
   layer_mark_dirty(s_time_box_layer);
 }
 
@@ -134,39 +137,166 @@ static void draw_progress_border(GContext *ctx, GRect bounds, int percent) {
   const int w = bounds.size.w;
   const int h = bounds.size.h;
   const int r = (w < h ? w : h) / 2;
-  const int straight = w - 2 * r;
   const int curve = (314 * r) / 100;
-  const int perimeter = 2 * straight + 2 * curve;
-  const int filled = (perimeter * percent) / 100;
 
-  int seg = filled < straight ? filled : straight;
-  if (seg > 0) {
-    graphics_draw_line(ctx, GPoint(x0 + r, y0), GPoint(x0 + r + seg, y0));
+  if (h <= w) {
+    // Horizontal pill: straights along top/bottom, semicircles on left/right.
+    const int straight = w - 2 * r;
+    const int perimeter = 2 * straight + 2 * curve;
+    const int filled = (perimeter * percent) / 100;
+
+    int seg = filled < straight ? filled : straight;
+    if (seg > 0) {
+      graphics_draw_line(ctx, GPoint(x0 + r, y0), GPoint(x0 + r + seg, y0));
+    }
+
+    int rem = filled - straight;
+    if (rem > 0) {
+      int cs = rem < curve ? rem : curve;
+      int end_deg = (180 * cs) / curve;
+      GRect arc_b = GRect(x0 + w - 2 * r, y0, 2 * r, 2 * r);
+      graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                        0, DEG_TO_TRIGANGLE(end_deg));
+    }
+
+    rem = filled - straight - curve;
+    if (rem > 0) {
+      int s3 = rem < straight ? rem : straight;
+      graphics_draw_line(ctx, GPoint(x0 + r + straight, y0 + h - 1),
+                         GPoint(x0 + r + straight - s3, y0 + h - 1));
+    }
+
+    rem = filled - 2 * straight - curve;
+    if (rem > 0) {
+      int cs = rem < curve ? rem : curve;
+      int end_deg = 180 + (180 * cs) / curve;
+      GRect arc_b = GRect(x0, y0, 2 * r, 2 * r);
+      graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                        DEG_TO_TRIGANGLE(180), DEG_TO_TRIGANGLE(end_deg));
+    }
+  } else {
+    // Vertical pill: straights down left/right, semicircles on top/bottom.
+    // Walk clockwise from top-center.
+    const int straight = h - 2 * r;
+    const int half_curve = curve / 2;
+    const int perimeter = 2 * straight + 2 * curve;
+    const int filled = (perimeter * percent) / 100;
+
+    int rem = filled;
+
+    if (rem > 0) {
+      int seg = rem < half_curve ? rem : half_curve;
+      int end_deg = (90 * seg) / half_curve;
+      GRect arc_b = GRect(x0, y0, 2 * r, 2 * r);
+      graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                        0, DEG_TO_TRIGANGLE(end_deg));
+      rem -= seg;
+    }
+
+    if (rem > 0 && straight > 0) {
+      int seg = rem < straight ? rem : straight;
+      graphics_draw_line(ctx, GPoint(x0 + w - 1, y0 + r),
+                         GPoint(x0 + w - 1, y0 + r + seg));
+      rem -= seg;
+    }
+
+    if (rem > 0) {
+      int seg = rem < curve ? rem : curve;
+      int end_deg = 90 + (180 * seg) / curve;
+      GRect arc_b = GRect(x0, y0 + h - 2 * r, 2 * r, 2 * r);
+      graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                        DEG_TO_TRIGANGLE(90), DEG_TO_TRIGANGLE(end_deg));
+      rem -= seg;
+    }
+
+    if (rem > 0 && straight > 0) {
+      int seg = rem < straight ? rem : straight;
+      graphics_draw_line(ctx, GPoint(x0, y0 + h - r),
+                         GPoint(x0, y0 + h - r - seg));
+      rem -= seg;
+    }
+
+    if (rem > 0) {
+      int seg = rem < half_curve ? rem : half_curve;
+      int end_deg = 270 + (90 * seg) / half_curve;
+      GRect arc_b = GRect(x0, y0, 2 * r, 2 * r);
+      graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                        DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(end_deg));
+    }
   }
+}
 
-  int rem = filled - straight;
-  if (rem > 0) {
-    int cs = rem < curve ? rem : curve;
-    int end_deg = (180 * cs) / curve;
+static void draw_rounded_rect_border(GContext *ctx, GRect bounds, int r, int percent) {
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+
+  const int x0 = bounds.origin.x;
+  const int y0 = bounds.origin.y;
+  const int w = bounds.size.w;
+  const int h = bounds.size.h;
+  if (r > w / 2) r = w / 2;
+  if (r > h / 2) r = h / 2;
+
+  const int top_w  = w - 2 * r;
+  const int side_h = h - 2 * r;
+  const int corner = (314 * r) / 200;
+  const int perimeter = 2 * top_w + 2 * side_h + 4 * corner;
+  const int filled = (perimeter * percent) / 100;
+  int rem = filled;
+
+  if (rem > 0 && top_w > 0) {
+    int seg = rem < top_w ? rem : top_w;
+    graphics_draw_line(ctx, GPoint(x0 + r, y0), GPoint(x0 + r + seg, y0));
+    rem -= seg;
+  }
+  if (rem > 0 && corner > 0) {
+    int seg = rem < corner ? rem : corner;
+    int end_deg = (90 * seg) / corner;
     GRect arc_b = GRect(x0 + w - 2 * r, y0, 2 * r, 2 * r);
     graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
                       0, DEG_TO_TRIGANGLE(end_deg));
+    rem -= seg;
   }
-
-  rem = filled - straight - curve;
-  if (rem > 0) {
-    int s3 = rem < straight ? rem : straight;
-    graphics_draw_line(ctx, GPoint(x0 + r + straight, y0 + h - 1),
-                       GPoint(x0 + r + straight - s3, y0 + h - 1));
+  if (rem > 0 && side_h > 0) {
+    int seg = rem < side_h ? rem : side_h;
+    graphics_draw_line(ctx, GPoint(x0 + w - 1, y0 + r),
+                       GPoint(x0 + w - 1, y0 + r + seg));
+    rem -= seg;
   }
-
-  rem = filled - 2 * straight - curve;
-  if (rem > 0) {
-    int cs = rem < curve ? rem : curve;
-    int end_deg = 180 + (180 * cs) / curve;
-    GRect arc_b = GRect(x0, y0, 2 * r, 2 * r);
+  if (rem > 0 && corner > 0) {
+    int seg = rem < corner ? rem : corner;
+    int end_deg = 90 + (90 * seg) / corner;
+    GRect arc_b = GRect(x0 + w - 2 * r, y0 + h - 2 * r, 2 * r, 2 * r);
+    graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(90), DEG_TO_TRIGANGLE(end_deg));
+    rem -= seg;
+  }
+  if (rem > 0 && top_w > 0) {
+    int seg = rem < top_w ? rem : top_w;
+    graphics_draw_line(ctx, GPoint(x0 + w - r, y0 + h - 1),
+                       GPoint(x0 + w - r - seg, y0 + h - 1));
+    rem -= seg;
+  }
+  if (rem > 0 && corner > 0) {
+    int seg = rem < corner ? rem : corner;
+    int end_deg = 180 + (90 * seg) / corner;
+    GRect arc_b = GRect(x0, y0 + h - 2 * r, 2 * r, 2 * r);
     graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
                       DEG_TO_TRIGANGLE(180), DEG_TO_TRIGANGLE(end_deg));
+    rem -= seg;
+  }
+  if (rem > 0 && side_h > 0) {
+    int seg = rem < side_h ? rem : side_h;
+    graphics_draw_line(ctx, GPoint(x0, y0 + h - r),
+                       GPoint(x0, y0 + h - r - seg));
+    rem -= seg;
+  }
+  if (rem > 0 && corner > 0) {
+    int seg = rem < corner ? rem : corner;
+    int end_deg = 270 + (90 * seg) / corner;
+    GRect arc_b = GRect(x0, y0, 2 * r, 2 * r);
+    graphics_draw_arc(ctx, arc_b, GOvalScaleModeFitCircle,
+                      DEG_TO_TRIGANGLE(270), DEG_TO_TRIGANGLE(end_deg));
   }
 }
 
@@ -202,10 +332,10 @@ static void update_hr(void) {
 static void time_box_update_proc(Layer *layer, GContext *ctx) {
   GRect bounds = layer_get_bounds(layer);
   const int border_w = 3;
-  const int outer_r = bounds.size.h / 2;
+  const int corner_r = 10;
 
   graphics_context_set_fill_color(ctx, s_color_bg);
-  graphics_fill_rect(ctx, bounds, outer_r, GCornersAll);
+  graphics_fill_rect(ctx, bounds, corner_r, GCornersAll);
 
   GRect path = GRect(bounds.origin.x + 1,
                      bounds.origin.y + 1,
@@ -213,17 +343,22 @@ static void time_box_update_proc(Layer *layer, GContext *ctx) {
                      bounds.size.h - 2);
   graphics_context_set_stroke_color(ctx, s_color_time);
   graphics_context_set_stroke_width(ctx, border_w);
-  draw_progress_border(ctx, path, s_border_progress);
+  draw_rounded_rect_border(ctx, path, corner_r, s_border_progress);
 
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-  const int font_h = 28;
-  const int top_pad = 4;
-  GRect text_rect = GRect(bounds.origin.x,
-                          bounds.origin.y + (bounds.size.h - font_h) / 2 - top_pad,
-                          bounds.size.w,
-                          font_h + top_pad);
+  GFont font = fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS);
+  const int line_h = 49;
+  const int line_offset = 42;
+  const int total_h = line_h + line_offset;
+  const int font_top_pad = 8;
+  const int top = bounds.origin.y + (bounds.size.h - total_h) / 2 - font_top_pad;
+
+  GRect hour_rect = GRect(bounds.origin.x, top, bounds.size.w, line_h);
+  GRect min_rect  = GRect(bounds.origin.x, top + line_offset, bounds.size.w, line_h);
+
   graphics_context_set_text_color(ctx, s_color_time);
-  graphics_draw_text(ctx, s_time_buffer, font, text_rect,
+  graphics_draw_text(ctx, s_hour_buffer, font, hour_rect,
+                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+  graphics_draw_text(ctx, s_minute_buffer, font, min_rect,
                      GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
@@ -459,19 +594,37 @@ static void main_window_load(Window *window) {
   const int16_t widget_h = 28;
   const int16_t date_h = 22;
   const int16_t intra_gap = 2;
-  const int16_t stack_h = ICON_SIZE + intra_gap + widget_h;
+  const int16_t stack_h = ICON_SIZE + intra_gap + widget_h; 
+  const int16_t value_gap = 4;
   const int16_t left_col_w = 60;
-  const int16_t col_gap = 6;
-  const int16_t left_x = content.origin.x;
-  const int16_t right_x = left_x + left_col_w + col_gap;
+  const int16_t center_pad = 12;
+  const int16_t progress_pad = 8;
+  const int16_t stroke_allowance = 2;
+  const int16_t total_pad = progress_pad + stroke_allowance;
+  // Anchor both columns `center_pad` px away from the vertical center: the
+  // left column's right edge sits at center_x - 4, the time box at center_x + 4.
+  // If that would push the steps progress pill off the left edge, fall back to
+  // edge-anchor with a 2*center_pad gap.
+  const int16_t center_x = content.origin.x + content.size.w / 2;
+  const int16_t candidate_left_x = center_x - center_pad - left_col_w;
+  int16_t left_x, right_x;
+  if (candidate_left_x >= total_pad) {
+    left_x = candidate_left_x;
+    right_x = center_x + center_pad;
+  } else {
+    left_x = content.origin.x < total_pad ? total_pad : content.origin.x;
+    right_x = left_x + left_col_w + 2 * center_pad;
+  }
   const int16_t right_col_w = content.origin.x + content.size.w - right_x;
   const int16_t stack_icon_x = left_x + (left_col_w - ICON_SIZE) / 2;
 
-  // Time pill — vertically centered in the content rect.
+  // Time box — vertically centered in `content`, capped at TIME_BOX_W. Anchored
+  // at right_x so the centered-block layout above stays balanced.
   const int16_t box_h = TIME_BOX_H;
+  const int16_t box_w = right_col_w < TIME_BOX_W ? right_col_w : TIME_BOX_W;
   GRect time_rect = GRect(right_x,
                           content.origin.y + (content.size.h - box_h) / 2,
-                          right_col_w,
+                          box_w,
                           box_h);
   s_time_box_layer = layer_create(time_rect);
   layer_set_update_proc(s_time_box_layer, time_box_update_proc);
@@ -517,9 +670,6 @@ static void main_window_load(Window *window) {
   s_steps_layer = make_text_layer(GRect(left_x, steps_y + ICON_SIZE + intra_gap, left_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
   layer_add_child(root, text_layer_get_layer(s_steps_layer));
 
-  const int16_t progress_pad = 8;
-  const int16_t stroke_allowance = 2;
-  const int16_t total_pad = progress_pad + stroke_allowance;
   GRect steps_progress_rect = GRect(left_x - total_pad,
                                     steps_y - total_pad,
                                     left_col_w + 2 * total_pad,
