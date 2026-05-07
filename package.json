@@ -1,0 +1,45 @@
+{
+  "name": "pebble-wear-face",
+  "author": "MakeAwesomeHappen",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {
+    "pebble-clay": "^1.0.4"
+  },
+  "pebble": {
+    "displayName": "pebble-wear-face",
+    "uuid": "7b5d1d3c-4e90-41c0-80a3-ef784c9b41d7",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "aplite",
+      "basalt",
+      "chalk",
+      "diorite",
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "messageKeys": [
+      "REQUEST_WEATHER",
+      "TEMPERATURE",
+      "CONDITIONS",
+      "STEP_GOAL",
+      "THEME"
+    ],
+    "resources": {
+      "media": [
+        { "type": "bitmap", "name": "ICON_CLOUD_DARK",  "file": "icons/cloud_dark.png"  },
+        { "type": "bitmap", "name": "ICON_CLOUD_LIGHT", "file": "icons/cloud_light.png" },
+        { "type": "bitmap", "name": "ICON_STEPS_DARK",  "file": "icons/steps_dark.png"  },
+        { "type": "bitmap", "name": "ICON_STEPS_LIGHT", "file": "icons/steps_light.png" },
+        { "type": "bitmap", "name": "ICON_HEART_DARK",  "file": "icons/heart_dark.png"  },
+        { "type": "bitmap", "name": "ICON_HEART_LIGHT", "file": "icons/heart_light.png" }
+      ]
+    }
+  }
+}

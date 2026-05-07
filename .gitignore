@@ -1,0 +1,8 @@
+.lock*
+build/
+node_modules/
+resources/*.bin
+*.pbw
+*:Zone.Identifier
+.venv/
+.DS_Store
