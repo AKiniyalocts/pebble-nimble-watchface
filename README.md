@@ -8,39 +8,43 @@ left of center. Configurable via Clay (step goal, dark/light theme).
 ## Layout
 
 ```
-                +------------+
-   [cloud icon] |    weather |     <- weather centered above the time pill
-   [   72°    ] +------------+
-                |            |
-   [steps]      | (   time   |     <- bordered pill, 3px frame, rounded ends
-    8,432       |   12:34    |
-                |            |
-                +------------+
-                |   6 May    |     <- date caption directly under the pill
-                |            |
-   [heart]
-    72
+                  +------------+
+   [cloud icon]   |   weather  |     <- weather centered above the time pill
+   [   72°    ]   +------------+
+                  |            |
+   ( [steps] )    |     12     |     <- circle around steps icon only;
+      8,432       |     34     |        time HH stacked over MM
+                  |            |        with animated rounded-rect border
+                  +------------+
+                  |    6 May   |     <- date caption directly under the pill
+                  |            |
+    [heart]
+     72
 ```
 
-- The Steps and HR columns sit `center_pad = 20px` left of the screen's
+- The Steps and HR columns sit `center_pad = 12px` left of the screen's
   vertical centerline. The time/date column hugs `center_pad` to the right of
   it.
-- Steps and HR are vertical "icon over value" stacks; both are vertically
-  centered as a group with `widget_gap` (currently 50px) between them.
-- The Steps widget gets a pill-shaped progress border around the whole stack:
-  a 1px gray "track" pill is always visible (when a step goal is set), and
-  the filled portion is drawn 5px thick over the track, walking the perimeter
-  clockwise from the top of the straight section.
+- Steps and HR are vertical "icon over value" stacks, vertically centered as
+  a group with `widget_gap` (clamped 8–50px) between them. The Steps stack is
+  taller than the HR stack because its icon sits inside a circular progress
+  badge with the value rendered 4px below.
+- The Steps widget has a circular progress border around its icon only: a
+  1px gray "track" circle is always visible (when a step goal is set), and
+  the filled portion is drawn 5px thick over the track, sweeping the
+  circumference clockwise from the top via `graphics_draw_arc`.
 
 ## Features
 
 ### Time
-- Bordered pill (rounded ends), 3px outline, drawn via two
-  `graphics_fill_rect` calls (outer fill in time color, inner fill in bg
-  color).
-- Bold 28px text, vertically and horizontally centered. 24h vs 12h follows
-  the system `clock_is_24h_style()`.
-- Updates on `MINUTE_UNIT` ticks.
+- Rounded-rect frame, 3px outline rendered via stroked arcs and lines so the
+  perimeter can animate around the box once per minute as a "second hand"
+  (toggleable via Clay).
+- `FONT_KEY_ROBOTO_BOLD_SUBSET_49` numerals, hour stacked tight over minutes
+  (no gap between cap heights), both center-aligned, with 4px of symmetric
+  padding above the hour and below the minute inside the box. 24h vs 12h
+  follows the system `clock_is_24h_style()`.
+- Updates on `MINUTE_UNIT` ticks; the border animation re-arms each tick.
 
 ### Date
 - Caption directly under the time pill, format `"%-d %b"` (e.g. `6 May`).
@@ -61,9 +65,9 @@ left of center. Configurable via Clay (step goal, dark/light theme).
 - Pulled from `health_service_sum_today(HealthMetricStepCount)` on every
   `HealthEventMovementUpdate`.
 - Formatted with thousands separator (e.g. `8,432`).
-- Pill-shaped progress border traces from 0% (top of straight section) to
-  100% (full pill outline) clockwise, using `graphics_draw_line` for the
-  straights and `graphics_draw_arc` for the semicircular ends.
+- Circular progress border around the icon only, drawn as two semicircle
+  arcs via `graphics_draw_arc`. Sweeps from 0% (top of the circle) to 100%
+  (full circumference) clockwise. The step count sits 4px below the circle.
 - Goal default is `10000`; configurable via Clay (see Settings).
 
 ### Heart rate
@@ -93,7 +97,10 @@ left of center. Configurable via Clay (step goal, dark/light theme).
   it drops down into place (400 ms `EaseOut`). Subsequent weather refreshes
   just update the temperature in place; the slide-in only fires once per
   watchface load (gated by `s_weather_animated`).
-- Time pill and date are static (no animation).
+- Time numerals and date are static; the time pill border animates around
+  its perimeter once per minute as a "second hand" via a custom
+  `AnimationImplementation` driving `s_border_progress`. Disabling
+  "Animate seconds" in Clay leaves the border drawn at 100%.
 - Helpers: `slide_in_from(layer, from_origin, delay, duration)` snaps the
   layer to the off-screen origin then animates back to its current frame;
   `animate_layer_to(layer, to, delay, duration)` animates from the current
@@ -108,7 +115,8 @@ the Clay-rendered configuration page. Fields:
 | Field | Type | Effect |
 |---|---|---|
 | Theme | Radio (Dark / Light) | Switches the entire color scheme live |
-| Daily step goal | Number input (step 500) | Sets the perimeter the progress pill fills against |
+| Animate seconds | Toggle | Traces the time-box border once per minute as a second hand |
+| Daily step goal | Number input (step 500) | Sets the circumference the progress circle fills against |
 
 Values are persisted by Clay in phone-side `localStorage` (so the form
 remembers what you set last) and on the watch via `persist_write_int` (so
@@ -192,6 +200,7 @@ on the JS side.
 | `CONDITIONS` | JS → C | cstring | Short condition label (Clear/Cloudy/...) |
 | `STEP_GOAL` | JS → C | cstring | Daily step goal (parsed via `atoi`) |
 | `THEME` | JS → C | cstring | `"0"` = dark, `"1"` = light |
+| `ANIMATE_SECONDS` | JS → C | bool | Enables the time-box border second-hand animation |
 
 Clay sends form values as strings; the C side branches on
 `tuple->type == TUPLE_CSTRING` and falls back to `int32` for safety.

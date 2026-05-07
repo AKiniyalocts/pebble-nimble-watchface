@@ -35,7 +35,7 @@ static bool s_animate_seconds = true;
 
 #define ICON_SIZE 28
 #define ICON_GAP  4
-#define TIME_BOX_H 96
+#define TIME_BOX_H 106
 #define TIME_BOX_W 80
 #define DEFAULT_STEP_GOAL 10000
 
@@ -345,11 +345,11 @@ static void time_box_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_stroke_width(ctx, border_w);
   draw_rounded_rect_border(ctx, path, corner_r, s_border_progress);
 
-  GFont font = fonts_get_system_font(FONT_KEY_LECO_42_NUMBERS);
-  const int line_h = 49;
-  const int line_offset = 42;
+  GFont font = fonts_get_system_font(FONT_KEY_ROBOTO_BOLD_SUBSET_49);
+  const int line_h = 52;
+  const int line_offset = 49;
   const int total_h = line_h + line_offset;
-  const int font_top_pad = 8;
+  const int font_top_pad = 10;
   const int top = bounds.origin.y + (bounds.size.h - total_h) / 2 - font_top_pad;
 
   GRect hour_rect = GRect(bounds.origin.x, top, bounds.size.w, line_h);
@@ -594,13 +594,15 @@ static void main_window_load(Window *window) {
   const int16_t widget_h = 28;
   const int16_t date_h = 22;
   const int16_t intra_gap = 2;
-  const int16_t stack_h = ICON_SIZE + intra_gap + widget_h; 
-  const int16_t value_gap = 4;
   const int16_t left_col_w = 60;
   const int16_t center_pad = 12;
   const int16_t progress_pad = 8;
   const int16_t stroke_allowance = 2;
   const int16_t total_pad = progress_pad + stroke_allowance;
+  const int16_t steps_circle_size = ICON_SIZE + 2 * total_pad;
+  const int16_t steps_value_pad = 4;
+  const int16_t steps_stack_h = steps_circle_size + steps_value_pad + widget_h;
+  const int16_t hr_stack_h = ICON_SIZE + intra_gap + widget_h;
   // Anchor both columns `center_pad` px away from the vertical center: the
   // left column's right edge sits at center_x - 4, the time box at center_x + 4.
   // If that would push the steps progress pill off the left edge, fall back to
@@ -643,14 +645,14 @@ static void main_window_load(Window *window) {
   // small displays don't push Steps off the top.
   int16_t widget_gap = 0;
   if (s_hr_available) {
-    int16_t free_h = content.size.h - 2 * stack_h;
+    int16_t free_h = content.size.h - steps_stack_h - hr_stack_h;
     widget_gap = free_h / 2;
-    if (widget_gap < 20) widget_gap = 20;
+    if (widget_gap < 8) widget_gap = 8;
     if (widget_gap > 50) widget_gap = 50;
   }
-  const int16_t group_h = s_hr_available ? (2 * stack_h + widget_gap) : stack_h;
-  const int16_t steps_y = content.origin.y + (content.size.h - group_h) / 2;
-  const int16_t hr_y = steps_y + stack_h + widget_gap;
+  const int16_t group_h = s_hr_available ? (steps_stack_h + widget_gap + hr_stack_h) : steps_stack_h;
+  const int16_t steps_top_y = content.origin.y + (content.size.h - group_h) / 2;
+  const int16_t hr_y = steps_top_y + steps_stack_h + widget_gap;
 
   // Weather — anchored just above the time pill.
   s_weather_target_frame = GRect(time_rect.origin.x,
@@ -665,15 +667,15 @@ static void main_window_load(Window *window) {
   layer_set_update_proc(s_weather_layer, weather_widget_update_proc);
   layer_add_child(root, s_weather_layer);
 
-  s_steps_bmp_layer = make_icon_layer(GRect(stack_icon_x, steps_y, ICON_SIZE, ICON_SIZE), s_steps_bmp);
+  s_steps_bmp_layer = make_icon_layer(GRect(stack_icon_x, steps_top_y + total_pad, ICON_SIZE, ICON_SIZE), s_steps_bmp);
   layer_add_child(root, bitmap_layer_get_layer(s_steps_bmp_layer));
-  s_steps_layer = make_text_layer(GRect(left_x, steps_y + ICON_SIZE + intra_gap, left_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
+  s_steps_layer = make_text_layer(GRect(left_x, steps_top_y + steps_circle_size + steps_value_pad, left_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
   layer_add_child(root, text_layer_get_layer(s_steps_layer));
 
-  GRect steps_progress_rect = GRect(left_x - total_pad,
-                                    steps_y - total_pad,
-                                    left_col_w + 2 * total_pad,
-                                    stack_h + 2 * total_pad);
+  GRect steps_progress_rect = GRect(stack_icon_x - total_pad,
+                                    steps_top_y,
+                                    steps_circle_size,
+                                    steps_circle_size);
   s_steps_progress_layer = layer_create(steps_progress_rect);
   layer_set_update_proc(s_steps_progress_layer, steps_progress_update_proc);
   layer_add_child(root, s_steps_progress_layer);

@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:developer.repebble.com)",
-      "Bash(pebble build *)"
-    ]
-  }
-}
