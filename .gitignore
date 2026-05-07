@@ -6,3 +6,4 @@ resources/*.bin
 *:Zone.Identifier
 .venv/
 .DS_Store
+.claude/
