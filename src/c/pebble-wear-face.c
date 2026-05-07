@@ -27,6 +27,11 @@ static GBitmap *s_hr_bmp;
 static BitmapLayer *s_hr_bmp_layer;
 static bool s_hr_available = false;
 
+static int s_border_progress = 100;
+static int s_border_anim_start = 0;
+static Animation *s_border_anim = NULL;
+static bool s_animate_seconds = true;
+
 #define ICON_SIZE 28
 #define ICON_GAP  4
 #define TIME_BOX_H 50
@@ -199,15 +204,16 @@ static void time_box_update_proc(Layer *layer, GContext *ctx) {
   const int border_w = 3;
   const int outer_r = bounds.size.h / 2;
 
-  graphics_context_set_fill_color(ctx, s_color_time);
+  graphics_context_set_fill_color(ctx, s_color_bg);
   graphics_fill_rect(ctx, bounds, outer_r, GCornersAll);
 
-  GRect inner = GRect(bounds.origin.x + border_w,
-                      bounds.origin.y + border_w,
-                      bounds.size.w - 2 * border_w,
-                      bounds.size.h - 2 * border_w);
-  graphics_context_set_fill_color(ctx, s_color_bg);
-  graphics_fill_rect(ctx, inner, inner.size.h / 2, GCornersAll);
+  GRect path = GRect(bounds.origin.x + 1,
+                     bounds.origin.y + 1,
+                     bounds.size.w - 2,
+                     bounds.size.h - 2);
+  graphics_context_set_stroke_color(ctx, s_color_time);
+  graphics_context_set_stroke_width(ctx, border_w);
+  draw_progress_border(ctx, path, s_border_progress);
 
   GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   const int font_h = 28;
@@ -219,6 +225,52 @@ static void time_box_update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_text_color(ctx, s_color_time);
   graphics_draw_text(ctx, s_time_buffer, font, text_rect,
                      GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
+}
+
+static void border_anim_update(Animation *anim, const AnimationProgress dist_normalized) {
+  int range = 100 - s_border_anim_start;
+  s_border_progress = s_border_anim_start + ((int)dist_normalized * range) / ANIMATION_NORMALIZED_MAX;
+  if (s_time_box_layer) layer_mark_dirty(s_time_box_layer);
+}
+
+static void border_anim_teardown(Animation *anim) {
+  s_border_anim = NULL;
+}
+
+static const AnimationImplementation s_border_impl = {
+  .update = border_anim_update,
+  .teardown = border_anim_teardown,
+};
+
+static void start_border_animation(void) {
+  if (s_border_anim) {
+    animation_unschedule(s_border_anim);
+  }
+  time_t now = time(NULL);
+  struct tm *t = localtime(&now);
+  s_border_anim_start = (t->tm_sec * 100) / 60;
+  s_border_progress = s_border_anim_start;
+  uint32_t duration_ms = (60 - t->tm_sec) * 1000;
+  if (duration_ms < 100) duration_ms = 100;
+
+  s_border_anim = animation_create();
+  animation_set_implementation(s_border_anim, &s_border_impl);
+  animation_set_duration(s_border_anim, duration_ms);
+  animation_set_curve(s_border_anim, AnimationCurveLinear);
+  animation_schedule(s_border_anim);
+}
+
+static void apply_animate_seconds(bool enabled) {
+  s_animate_seconds = enabled;
+  if (enabled) {
+    start_border_animation();
+  } else {
+    if (s_border_anim) {
+      animation_unschedule(s_border_anim);
+    }
+    s_border_progress = 100;
+    if (s_time_box_layer) layer_mark_dirty(s_time_box_layer);
+  }
 }
 
 static void request_weather(void) {
@@ -233,6 +285,9 @@ static void request_weather(void) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time();
   update_date();
+  if (s_animate_seconds) {
+    start_border_animation();
+  }
   if (tick_time->tm_min % 30 == 0) {
     request_weather();
   }
@@ -281,6 +336,24 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     }
     persist_write_int(MESSAGE_KEY_THEME, new_theme);
     apply_theme(new_theme);
+  }
+  Tuple *anim_tuple = dict_find(iter, MESSAGE_KEY_ANIMATE_SECONDS);
+  if (anim_tuple) {
+    bool enabled;
+    switch (anim_tuple->type) {
+      case TUPLE_CSTRING:
+        enabled = atoi(anim_tuple->value->cstring) != 0;
+        break;
+      case TUPLE_INT:
+      case TUPLE_UINT:
+        enabled = anim_tuple->value->int32 != 0;
+        break;
+      default:
+        enabled = anim_tuple->value->uint8 != 0;
+        break;
+    }
+    persist_write_bool(MESSAGE_KEY_ANIMATE_SECONDS, enabled);
+    apply_animate_seconds(enabled);
   }
 }
 
@@ -495,6 +568,11 @@ static void prv_init(void) {
   int saved_theme = persist_read_int(MESSAGE_KEY_THEME);
   compute_theme_colors(saved_theme == THEME_LIGHT ? THEME_LIGHT : THEME_DARK);
 
+  s_animate_seconds = persist_exists(MESSAGE_KEY_ANIMATE_SECONDS)
+      ? persist_read_bool(MESSAGE_KEY_ANIMATE_SECONDS)
+      : true;
+  s_border_progress = s_animate_seconds ? 0 : 100;
+
   s_main_window = window_create();
   window_set_background_color(s_main_window, s_color_bg);
   window_set_window_handlers(s_main_window, (WindowHandlers) {
@@ -510,12 +588,19 @@ static void prv_init(void) {
   app_message_open(app_message_inbox_size_maximum(),
                    app_message_outbox_size_maximum());
 
+  if (s_animate_seconds) {
+    start_border_animation();
+  }
+
   request_weather();
 }
 
 static void prv_deinit(void) {
   tick_timer_service_unsubscribe();
   health_service_events_unsubscribe();
+  if (s_border_anim) {
+    animation_unschedule(s_border_anim);
+  }
   window_destroy(s_main_window);
 }
 

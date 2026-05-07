@@ -29,7 +29,8 @@
       "TEMPERATURE",
       "CONDITIONS",
       "STEP_GOAL",
-      "THEME"
+      "THEME",
+      "ANIMATE_SECONDS"
     ],
     "resources": {
       "media": [

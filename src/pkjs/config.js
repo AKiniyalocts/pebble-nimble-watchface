@@ -19,6 +19,13 @@ module.exports = [
           { "label": "Dark",  "value": "0" },
           { "label": "Light", "value": "1" }
         ]
+      },
+      {
+        "type": "toggle",
+        "messageKey": "ANIMATE_SECONDS",
+        "label": "Animate seconds",
+        "description": "Trace the line around the time box once per minute to show the seconds.",
+        "defaultValue": true
       }
     ]
   },
