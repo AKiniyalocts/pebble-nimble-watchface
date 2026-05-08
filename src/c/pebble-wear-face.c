@@ -72,8 +72,25 @@ static GBitmap *load_themed_icon(int theme, uint32_t dark_id, uint32_t light_id)
   return gbitmap_create_with_resource(theme == THEME_LIGHT ? light_id : dark_id);
 }
 
+// Overlay persisted user color picks (Clay color picker) on top of whatever
+// `compute_theme_colors` produced. Theme defaults survive only until the
+// user chooses a color; once persisted, the user's pick wins on every theme
+// switch.
+static void apply_user_widget_colors(void) {
+  if (persist_exists(MESSAGE_KEY_WEATHER_COLOR)) {
+    s_color_weather = GColorFromHEX(persist_read_int(MESSAGE_KEY_WEATHER_COLOR));
+  }
+  if (persist_exists(MESSAGE_KEY_STEPS_COLOR)) {
+    s_color_steps = GColorFromHEX(persist_read_int(MESSAGE_KEY_STEPS_COLOR));
+  }
+  if (persist_exists(MESSAGE_KEY_HR_COLOR)) {
+    s_color_hr = GColorFromHEX(persist_read_int(MESSAGE_KEY_HR_COLOR));
+  }
+}
+
 static void apply_theme(int theme) {
   compute_theme_colors(theme);
+  apply_user_widget_colors();
   if (s_main_window) {
     gbitmap_destroy(s_weather_bmp);
     gbitmap_destroy(s_steps_bmp);
@@ -401,6 +418,18 @@ static void health_handler(HealthEventType event, void *context) {
   }
 }
 
+// When a notification (or any obstruction) shrinks the visible watchface,
+// hide the steps value text so it doesn't overlap the time at the bottom.
+// Only the value is hidden — the steps progress circle stays visible.
+static void unobstructed_did_change(void *context) {
+  if (!s_main_window || !s_steps_layer) return;
+  Layer *root = window_get_root_layer(s_main_window);
+  GRect full = layer_get_bounds(root);
+  GRect unob = layer_get_unobstructed_bounds(root);
+  bool obstructed = unob.size.h < full.size.h;
+  layer_set_hidden(text_layer_get_layer(s_steps_layer), obstructed);
+}
+
 static void animate_layer_to(Layer *layer, GRect to, uint32_t delay, uint32_t duration);
 
 static void inbox_received_handler(DictionaryIterator *iter, void *context) {
@@ -468,6 +497,28 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     s_bottom_fg_color = GColorFromHEX(hex);
     if (s_time_layer) text_layer_set_text_color(s_time_layer, s_bottom_fg_color);
     if (s_date_layer) text_layer_set_text_color(s_date_layer, s_bottom_fg_color);
+  }
+  Tuple *weather_tuple = dict_find(iter, MESSAGE_KEY_WEATHER_COLOR);
+  if (weather_tuple) {
+    int hex = (int)weather_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_WEATHER_COLOR, hex);
+    s_color_weather = GColorFromHEX(hex);
+    if (s_weather_layer) layer_mark_dirty(s_weather_layer);
+  }
+  Tuple *steps_tuple = dict_find(iter, MESSAGE_KEY_STEPS_COLOR);
+  if (steps_tuple) {
+    int hex = (int)steps_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_STEPS_COLOR, hex);
+    s_color_steps = GColorFromHEX(hex);
+    if (s_steps_layer) text_layer_set_text_color(s_steps_layer, s_color_steps);
+    if (s_steps_progress_layer) layer_mark_dirty(s_steps_progress_layer);
+  }
+  Tuple *hr_tuple = dict_find(iter, MESSAGE_KEY_HR_COLOR);
+  if (hr_tuple) {
+    int hex = (int)hr_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_HR_COLOR, hex);
+    s_color_hr = GColorFromHEX(hex);
+    if (s_hr_available && s_hr_layer) text_layer_set_text_color(s_hr_layer, s_color_hr);
   }
 }
 
@@ -581,12 +632,11 @@ static void main_window_load(Window *window) {
   const int16_t total_pad = progress_pad + stroke_allowance;
   const int16_t steps_circle_size = ICON_SIZE + 2 * total_pad;
   const int16_t steps_value_pad = 4;
-  const int16_t steps_stack_h = steps_circle_size + steps_value_pad + widget_h;
-  const int16_t hr_stack_h = ICON_SIZE + intra_gap + widget_h;
 
-  // Steps/HR column anchors `center_pad` left of the screen centerline; if
-  // that would push the progress badge off the left edge, fall back to an
-  // edge-anchored layout.
+  // Two columns mirroring across the screen centerline: HR on the left,
+  // weather + steps stacked on the right. Each column anchors `center_pad`
+  // away from the centerline; if the left column would clip off the edge,
+  // fall back to an edge-anchored layout.
   const int16_t center_x = content.origin.x + content.size.w / 2;
   const int16_t candidate_left_x = center_x - center_pad - left_col_w;
   int16_t left_x;
@@ -596,6 +646,10 @@ static void main_window_load(Window *window) {
     left_x = content.origin.x < total_pad ? total_pad : content.origin.x;
   }
   const int16_t stack_icon_x = left_x + (left_col_w - ICON_SIZE) / 2;
+
+  const int16_t right_col_x = center_x + center_pad;
+  const int16_t right_col_w = content.origin.x + content.size.w - right_col_x;
+  const int16_t right_stack_icon_x = right_col_x + (right_col_w - ICON_SIZE) / 2;
 
   // Bottom row: time (Roboto Bold Subset 49, ~56px line height) on the left,
   // date (Gothic 18 Bold) on the right, both bottom-anchored to content.
@@ -629,37 +683,16 @@ static void main_window_load(Window *window) {
   s_date_layer = make_text_layer(date_rect, GTextAlignmentRight, FONT_KEY_GOTHIC_18_BOLD, s_bottom_fg_color);
   layer_add_child(root, text_layer_get_layer(s_date_layer));
 
-  // Middle band between the weather row and the time row. Steps + HR get
-  // centered within it; if the group is taller than the band, anchor HR's
-  // bottom to the band edge so the overflow goes upward (into the weather
-  // area) rather than colliding with the time row below.
-  const int16_t middle_top = content.origin.y + widget_h + 6;
-  const int16_t middle_bottom = bottom_row_y - 4;
-  const int16_t middle_band_h = middle_bottom - middle_top;
+  // Steps (right column, under the weather) and HR (left column) share a
+  // top `y` just below the weather row.
+  const int16_t weather_top_y = content.origin.y + 4;
+  const int16_t stack_top_y = weather_top_y + widget_h + 6;
+  const int16_t hr_y = stack_top_y;
 
-  int16_t widget_gap = 0;
-  if (s_hr_available) {
-    int16_t free_h = middle_band_h - steps_stack_h - hr_stack_h;
-    widget_gap = free_h / 2;
-    if (widget_gap < 4) widget_gap = 4;
-    if (widget_gap > 50) widget_gap = 50;
-  }
-  const int16_t group_h = s_hr_available ? (steps_stack_h + widget_gap + hr_stack_h) : steps_stack_h;
-  int16_t steps_top_y;
-  if (group_h <= middle_band_h) {
-    steps_top_y = middle_top + (middle_band_h - group_h) / 2;
-  } else {
-    steps_top_y = middle_bottom - group_h;
-  }
-  const int16_t hr_y = steps_top_y + steps_stack_h + widget_gap;
-
-  // Weather — pinned near the top, mirrored to the right column of the
-  // screen (mirror of the left steps/HR column across the centerline).
-  // weather_widget_update_proc centers icon+temp inside the layer's bounds.
-  const int16_t right_col_x = center_x + center_pad;
-  const int16_t right_col_w = content.origin.x + content.size.w - right_col_x;
+  // Weather — pinned near the top of the right column. Its `update_proc`
+  // centers icon+temp inside the layer's bounds.
   s_weather_target_frame = GRect(right_col_x,
-                                 content.origin.y + 4,
+                                 weather_top_y,
                                  right_col_w,
                                  widget_h);
   GRect weather_off = GRect(right_col_x, -widget_h - 4,
@@ -670,13 +703,13 @@ static void main_window_load(Window *window) {
   layer_set_update_proc(s_weather_layer, weather_widget_update_proc);
   layer_add_child(root, s_weather_layer);
 
-  s_steps_bmp_layer = make_icon_layer(GRect(stack_icon_x, steps_top_y + total_pad, ICON_SIZE, ICON_SIZE), s_steps_bmp);
+  s_steps_bmp_layer = make_icon_layer(GRect(right_stack_icon_x, stack_top_y + total_pad, ICON_SIZE, ICON_SIZE), s_steps_bmp);
   layer_add_child(root, bitmap_layer_get_layer(s_steps_bmp_layer));
-  s_steps_layer = make_text_layer(GRect(left_x, steps_top_y + steps_circle_size + steps_value_pad, left_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
+  s_steps_layer = make_text_layer(GRect(right_col_x, stack_top_y + steps_circle_size + steps_value_pad, right_col_w, widget_h), GTextAlignmentCenter, FONT_KEY_GOTHIC_24_BOLD, s_color_steps);
   layer_add_child(root, text_layer_get_layer(s_steps_layer));
 
-  GRect steps_progress_rect = GRect(stack_icon_x - total_pad,
-                                    steps_top_y,
+  GRect steps_progress_rect = GRect(right_stack_icon_x - total_pad,
+                                    stack_top_y,
                                     steps_circle_size,
                                     steps_circle_size);
   s_steps_progress_layer = layer_create(steps_progress_rect);
@@ -723,6 +756,7 @@ static void prv_init(void) {
 
   int saved_theme = persist_read_int(MESSAGE_KEY_THEME);
   compute_theme_colors(saved_theme == THEME_LIGHT ? THEME_LIGHT : THEME_DARK);
+  apply_user_widget_colors();
 
   s_animate_seconds = persist_exists(MESSAGE_KEY_ANIMATE_SECONDS)
       ? persist_read_bool(MESSAGE_KEY_ANIMATE_SECONDS)
@@ -746,6 +780,12 @@ static void prv_init(void) {
 
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   health_service_events_subscribe(health_handler, NULL);
+  unobstructed_area_service_subscribe(
+      (UnobstructedAreaHandlers){ .did_change = unobstructed_did_change },
+      NULL);
+  // Subscribe only fires on changes — apply the current state once at
+  // startup so we don't miss an obstruction that's already on screen.
+  unobstructed_did_change(NULL);
 
   app_message_register_inbox_received(inbox_received_handler);
   app_message_open(app_message_inbox_size_maximum(),
@@ -757,6 +797,7 @@ static void prv_init(void) {
 static void prv_deinit(void) {
   tick_timer_service_unsubscribe();
   health_service_events_unsubscribe();
+  unobstructed_area_service_unsubscribe();
   if (s_border_anim) {
     animation_unschedule(s_border_anim);
   }

@@ -2,21 +2,21 @@
 
 A Pebble watchface written in C with a PebbleKit JS companion. Shows a
 horizontal `HH:MM` clock baselined at the bottom of the screen with the date
-on the right end, a weather widget pinned near the top, and Steps + Heart
-Rate widgets stacked in the middle band on the left. Configurable via Clay
-(step goal, dark/light theme, second-hand animation).
+on the right end. Two columns mirror across the centerline: the right column
+holds the weather widget at the top with the steps badge directly below it,
+and the left column holds the heart rate widget at the same vertical level
+as the steps badge. Configurable via Clay (step goal, dark/light theme,
+bottom bar colors, widget colors).
 
 ## Layout
 
 ```
    +-----------------------+
-   |    [cloud] 72°        |     <- weather pinned near the top, full width
+   |              [cloud]  |     <- weather: top of the right column
+   |               72°     |
    |                       |
-   |  ( [steps] )          |
-   |     8,432             |     <- steps + HR column on the left, centered
-   |                       |        in the middle band between weather and
-   |   [heart]             |        the bottom time row
-   |    72                 |
+   |  [heart]   ( [steps] )|     <- HR (left) and steps (right) share a
+   |   72         8,432    |        common top y just below the weather
    |                       |
    |  12:34       6 May    |     <- bottom row: time on the left, date on
    +-----------------------+        the right, baselined at content bottom
@@ -26,19 +26,21 @@ Rate widgets stacked in the middle band on the left. Configurable via Clay
   `content.left` with Roboto Bold Subset 49 (~56px line height); date is
   right-aligned at `content.right` with Gothic 18 Bold inside a fixed 80px
   rect.
-- A solid background fills behind the bottom row, edge-to-edge across the
-  full screen width (bleeding past `content` so it covers the curved corners
-  on round). Both the fill and the time/date text colors are independent
-  Clay color-picker settings (`BOTTOM_BG_COLOR`, `BOTTOM_FG_COLOR`) — they
-  do not follow the dark/light Theme.
-- Weather is pinned 4px below `content.top`, anchored in the right column
-  (mirror of the steps/HR left column across the centerline) and centered
-  inside that rect.
-- Steps + HR are vertically centered in the middle band between the weather
-  row (top) and the time row (bottom), with `widget_gap` (clamped 4–50px)
-  between them. If the group is taller than the band, HR's bottom anchors
-  to the band edge so any overflow goes upward into the weather area
-  instead of colliding with the time row below.
+- A solid background with rounded top corners fills behind the bottom row,
+  edge-to-edge across the full screen width (bleeding past `content` so it
+  covers the curved corners on round). Both the fill and the time/date
+  text colors are independent Clay color-picker settings
+  (`BOTTOM_BG_COLOR`, `BOTTOM_FG_COLOR`) — they do not follow the
+  dark/light Theme.
+- Two columns anchor `center_pad = 12px` away from the screen centerline:
+  the **left column** (width `left_col_w = 60px`) holds the heart rate
+  widget; the **right column** (mirror of the left) holds the weather
+  widget at the top and the steps badge directly below it.
+- Weather is pinned 4px below `content.top`, full right-column width,
+  centered inside its rect by `weather_widget_update_proc`.
+- Steps and HR share `stack_top_y = weather_top + widget_h + 6px`, so the
+  top of the steps progress circle on the right and the top of the HR icon
+  on the left line up.
 - The Steps widget has a circular progress border around its icon only: a
   1px gray "track" circle is always visible (when a step goal is set), and
   the filled portion is drawn 5px thick over the track, sweeping the
@@ -84,6 +86,10 @@ Rate widgets stacked in the middle band on the left. Configurable via Clay
 - Circular progress border around the icon only, drawn as two semicircle
   arcs via `graphics_draw_arc`. Sweeps from 0% (top of the circle) to 100%
   (full circumference) clockwise. The step count sits 4px below the circle.
+- The step count text auto-hides when an obstruction (notification, quick
+  view) shrinks the watchface — driven by `UnobstructedAreaService`'s
+  `did_change` callback, comparing `layer_get_unobstructed_bounds` against
+  the layer's full bounds. The progress circle stays visible.
 - Goal default is `10000`; configurable via Clay (see Settings).
 
 ### Heart rate
@@ -128,10 +134,13 @@ the Clay-rendered configuration page. Fields:
 
 | Field | Type | Effect |
 |---|---|---|
-| Theme | Radio (Dark / Light) | Switches the rest of the watchface (weather/steps/HR/bg) — does not touch the bottom bar |
+| Theme | Radio (Dark / Light) | Switches the screen background and steps progress track. Widget colors (weather/steps/HR) get theme defaults until you pick custom colors below; bottom bar colors are independent. |
 | Animate seconds | Toggle | (currently a no-op — second-hand rendering is disabled; the setting is still persisted) |
 | Bottom bar background color | Native color picker | Fills the bottom strip behind the time + date (default black) |
 | Bottom bar text color | Native color picker | Color of the time and date text (default white) |
+| Weather color | Native color picker | Temperature text color (default Picton Blue, dark-theme variant) |
+| Steps color | Native color picker | Steps text + progress arc fill color (default Bright Green) |
+| Heart rate color | Native color picker | Heart-rate text color (default Red) |
 | Daily step goal | Number input (step 500) | Sets the circumference the progress circle fills against |
 
 Values are persisted by Clay in phone-side `localStorage` (so the form
@@ -184,7 +193,7 @@ collapse.
 ```
 src/c/pebble-wear-face.c   Watchface implementation
 src/pkjs/index.js          PebbleKit JS: weather fetch + Clay bootstrap
-src/pkjs/config.js         Clay schema (Theme, Animate seconds, Bottom bar colors, Daily step goal)
+src/pkjs/config.js         Clay schema (Theme, Animate seconds, Bottom bar colors, Widget colors, Daily step goal)
 resources/icons/           Pre-rendered 28x28 PNGs (dark & light variants)
 package.json               Project metadata, message keys, resources, deps
 wscript                    Pebble waf build rules
@@ -219,6 +228,9 @@ on the JS side.
 | `ANIMATE_SECONDS` | JS → C | bool | Enables the time-box border second-hand animation |
 | `BOTTOM_BG_COLOR` | JS → C | int32 | 0xRRGGBB hex — bottom bar fill color (`GColorFromHEX`) |
 | `BOTTOM_FG_COLOR` | JS → C | int32 | 0xRRGGBB hex — bottom bar text color (`GColorFromHEX`) |
+| `WEATHER_COLOR` | JS → C | int32 | 0xRRGGBB hex — weather temperature color |
+| `STEPS_COLOR` | JS → C | int32 | 0xRRGGBB hex — steps text + progress fill color |
+| `HR_COLOR` | JS → C | int32 | 0xRRGGBB hex — heart-rate text color |
 
 Clay sends form values as strings; the C side branches on
 `tuple->type == TUPLE_CSTRING` and falls back to `int32` for safety.

@@ -57,6 +57,36 @@ module.exports = [
     "items": [
       {
         "type": "heading",
+        "defaultValue": "Widget Colors"
+      },
+      {
+        "type": "color",
+        "messageKey": "WEATHER_COLOR",
+        "label": "Weather color",
+        "defaultValue": "0x55AAFF",
+        "sunlight": false
+      },
+      {
+        "type": "color",
+        "messageKey": "STEPS_COLOR",
+        "label": "Steps color",
+        "defaultValue": "0x00FF00",
+        "sunlight": false
+      },
+      {
+        "type": "color",
+        "messageKey": "HR_COLOR",
+        "label": "Heart rate color",
+        "defaultValue": "0xFF0000",
+        "sunlight": false
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
         "defaultValue": "Activity"
       },
       {

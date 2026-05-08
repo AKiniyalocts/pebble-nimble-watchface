@@ -32,7 +32,10 @@
       "THEME",
       "ANIMATE_SECONDS",
       "BOTTOM_BG_COLOR",
-      "BOTTOM_FG_COLOR"
+      "BOTTOM_FG_COLOR",
+      "WEATHER_COLOR",
+      "STEPS_COLOR",
+      "HR_COLOR"
     ],
     "resources": {
       "media": [
