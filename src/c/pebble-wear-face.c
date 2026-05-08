@@ -11,11 +11,8 @@ static GColor s_bottom_fg_color;
 static TextLayer *s_date_layer;
 static char s_date_buffer[16];
 
-static Layer *s_weather_layer;
+static TextLayer *s_weather_layer;
 static char s_weather_buffer[32];
-static GBitmap *s_weather_bmp;
-static GRect s_weather_target_frame;
-static bool s_weather_animated;
 
 static TextLayer *s_steps_layer;
 static char s_steps_buffer[16];
@@ -92,10 +89,8 @@ static void apply_theme(int theme) {
   compute_theme_colors(theme);
   apply_user_widget_colors();
   if (s_main_window) {
-    gbitmap_destroy(s_weather_bmp);
     gbitmap_destroy(s_steps_bmp);
-    s_weather_bmp = load_themed_icon(theme, RESOURCE_ID_ICON_CLOUD_DARK, RESOURCE_ID_ICON_CLOUD_LIGHT);
-    s_steps_bmp   = load_themed_icon(theme, RESOURCE_ID_ICON_STEPS_DARK, RESOURCE_ID_ICON_STEPS_LIGHT);
+    s_steps_bmp = load_themed_icon(theme, RESOURCE_ID_ICON_STEPS_DARK, RESOURCE_ID_ICON_STEPS_LIGHT);
     bitmap_layer_set_bitmap(s_steps_bmp_layer, s_steps_bmp);
 
     if (s_hr_available) {
@@ -107,6 +102,7 @@ static void apply_theme(int theme) {
 
     window_set_background_color(s_main_window, s_color_bg);
     text_layer_set_text_color(s_steps_layer, s_color_steps);
+    text_layer_set_text_color(s_weather_layer, s_color_weather);
     layer_mark_dirty(window_get_root_layer(s_main_window));
   }
 }
@@ -430,18 +426,12 @@ static void unobstructed_did_change(void *context) {
   layer_set_hidden(text_layer_get_layer(s_steps_layer), obstructed);
 }
 
-static void animate_layer_to(Layer *layer, GRect to, uint32_t delay, uint32_t duration);
-
 static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   Tuple *temp_tuple = dict_find(iter, MESSAGE_KEY_TEMPERATURE);
   if (temp_tuple) {
     snprintf(s_weather_buffer, sizeof(s_weather_buffer), "%d°",
              (int)temp_tuple->value->int32);
-    layer_mark_dirty(s_weather_layer);
-    if (!s_weather_animated) {
-      s_weather_animated = true;
-      animate_layer_to(s_weather_layer, s_weather_target_frame, 0, 400);
-    }
+    if (s_weather_layer) text_layer_set_text(s_weather_layer, s_weather_buffer);
   }
   Tuple *goal_tuple = dict_find(iter, MESSAGE_KEY_STEP_GOAL);
   if (goal_tuple) {
@@ -503,7 +493,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     int hex = (int)weather_tuple->value->int32;
     persist_write_int(MESSAGE_KEY_WEATHER_COLOR, hex);
     s_color_weather = GColorFromHEX(hex);
-    if (s_weather_layer) layer_mark_dirty(s_weather_layer);
+    if (s_weather_layer) text_layer_set_text_color(s_weather_layer, s_color_weather);
   }
   Tuple *steps_tuple = dict_find(iter, MESSAGE_KEY_STEPS_COLOR);
   if (steps_tuple) {
@@ -522,26 +512,6 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   }
 }
 
-static void weather_widget_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-  GSize text_size = graphics_text_layout_get_content_size(
-      s_weather_buffer, font, bounds,
-      GTextOverflowModeWordWrap, GTextAlignmentLeft);
-
-  const int total_w = ICON_SIZE + ICON_GAP + text_size.w;
-  const int start_x = bounds.origin.x + (bounds.size.w - total_w) / 2;
-
-  graphics_context_set_compositing_mode(ctx, GCompOpSet);
-  graphics_draw_bitmap_in_rect(ctx, s_weather_bmp,
-      GRect(start_x, bounds.origin.y, ICON_SIZE, ICON_SIZE));
-
-  graphics_context_set_text_color(ctx, s_color_weather);
-  graphics_draw_text(ctx, s_weather_buffer, font,
-      GRect(start_x + ICON_SIZE + ICON_GAP, bounds.origin.y,
-            text_size.w + 4, bounds.size.h),
-      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
-}
 
 static TextLayer *make_text_layer(GRect rect, GTextAlignment align, const char *font_key, GColor color) {
   TextLayer *layer = text_layer_create(rect);
@@ -612,16 +582,15 @@ static void main_window_load(Window *window) {
       HealthMetricHeartRateBPM, now_t, now_t);
   s_hr_available = (hr_mask & HealthServiceAccessibilityMaskAvailable) != 0;
 
-  s_weather_bmp = load_themed_icon(s_theme, RESOURCE_ID_ICON_CLOUD_DARK, RESOURCE_ID_ICON_CLOUD_LIGHT);
-  s_steps_bmp   = load_themed_icon(s_theme, RESOURCE_ID_ICON_STEPS_DARK, RESOURCE_ID_ICON_STEPS_LIGHT);
+  s_steps_bmp = load_themed_icon(s_theme, RESOURCE_ID_ICON_STEPS_DARK, RESOURCE_ID_ICON_STEPS_LIGHT);
   if (s_hr_available) {
     s_hr_bmp = load_themed_icon(s_theme, RESOURCE_ID_ICON_HEART_DARK, RESOURCE_ID_ICON_HEART_LIGHT);
   }
 
-  // Layout: weather pinned near the top, time + date forming a horizontal
-  // baseline at the bottom of the content area, steps + HR stacked in the
-  // middle band on the left. The bordered "second-progress" time box is
-  // disabled for now.
+  // Layout: time + date form a horizontal row at the bottom; the temperature
+  // sits directly above the date inside the bottom bar; HR (left) and steps
+  // (right) sit in the middle band sharing a common top y. The bordered
+  // "second-progress" time box is disabled for now.
   const int16_t widget_h = 28;
   const int16_t date_h = 22;
   const int16_t intra_gap = 2;
@@ -683,25 +652,31 @@ static void main_window_load(Window *window) {
   s_date_layer = make_text_layer(date_rect, GTextAlignmentRight, FONT_KEY_GOTHIC_18_BOLD, s_bottom_fg_color);
   layer_add_child(root, text_layer_get_layer(s_date_layer));
 
-  // Steps (right column, under the weather) and HR (left column) share a
-  // top `y` just below the weather row.
-  const int16_t weather_top_y = content.origin.y + 4;
-  const int16_t stack_top_y = weather_top_y + widget_h + 6;
-  const int16_t hr_y = stack_top_y;
-
-  // Weather — pinned near the top of the right column. Its `update_proc`
-  // centers icon+temp inside the layer's bounds.
-  s_weather_target_frame = GRect(right_col_x,
-                                 weather_top_y,
-                                 right_col_w,
-                                 widget_h);
-  GRect weather_off = GRect(right_col_x, -widget_h - 4,
-                            right_col_w, widget_h);
+  // Temperature — right-aligned, directly above the date inside the bottom
+  // bar. Same width and font sizing as the date so the two read as a stack.
+  GRect weather_rect = GRect(date_rect.origin.x,
+                             date_rect.origin.y - date_h,
+                             date_w,
+                             date_h);
   strcpy(s_weather_buffer, "...");
-  s_weather_animated = false;
-  s_weather_layer = layer_create(weather_off);
-  layer_set_update_proc(s_weather_layer, weather_widget_update_proc);
-  layer_add_child(root, s_weather_layer);
+  s_weather_layer = text_layer_create(weather_rect);
+  text_layer_set_background_color(s_weather_layer, GColorClear);
+  text_layer_set_text_color(s_weather_layer, s_color_weather);
+  text_layer_set_font(s_weather_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+  text_layer_set_text_alignment(s_weather_layer, GTextAlignmentRight);
+  text_layer_set_text(s_weather_layer, s_weather_buffer);
+  layer_add_child(root, text_layer_get_layer(s_weather_layer));
+
+  // HR (left) and steps (right) each vertically center themselves in the
+  // available space between `content.top` and the top of the bottom bar.
+  // They have different heights (steps stack is taller because of the
+  // progress circle), so they share a vertical midpoint rather than a top.
+  const int16_t steps_stack_h = steps_circle_size + steps_value_pad + widget_h;
+  const int16_t hr_stack_h = ICON_SIZE + intra_gap + widget_h;
+  const int16_t avail_top = content.origin.y;
+  const int16_t avail_h = bottom_row_y - avail_top;
+  const int16_t stack_top_y = avail_top + (avail_h - steps_stack_h) / 2;
+  const int16_t hr_y = avail_top + (avail_h - hr_stack_h) / 2;
 
   s_steps_bmp_layer = make_icon_layer(GRect(right_stack_icon_x, stack_top_y + total_pad, ICON_SIZE, ICON_SIZE), s_steps_bmp);
   layer_add_child(root, bitmap_layer_get_layer(s_steps_bmp_layer));
@@ -733,13 +708,12 @@ static void main_window_load(Window *window) {
 
 static void main_window_unload(Window *window) {
   text_layer_destroy(s_time_layer);
+  text_layer_destroy(s_weather_layer);
   layer_destroy(s_bottom_bg_layer);
-  layer_destroy(s_weather_layer);
   layer_destroy(s_steps_progress_layer);
   text_layer_destroy(s_date_layer);
   text_layer_destroy(s_steps_layer);
   bitmap_layer_destroy(s_steps_bmp_layer);
-  gbitmap_destroy(s_weather_bmp);
   gbitmap_destroy(s_steps_bmp);
   if (s_hr_available) {
     text_layer_destroy(s_hr_layer);

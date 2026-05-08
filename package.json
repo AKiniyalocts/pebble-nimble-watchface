@@ -39,8 +39,6 @@
     ],
     "resources": {
       "media": [
-        { "type": "bitmap", "name": "ICON_CLOUD_DARK",  "file": "icons/cloud_dark.png"  },
-        { "type": "bitmap", "name": "ICON_CLOUD_LIGHT", "file": "icons/cloud_light.png" },
         { "type": "bitmap", "name": "ICON_STEPS_DARK",  "file": "icons/steps_dark.png"  },
         { "type": "bitmap", "name": "ICON_STEPS_LIGHT", "file": "icons/steps_light.png" },
         { "type": "bitmap", "name": "ICON_HEART_DARK",  "file": "icons/heart_dark.png"  },

@@ -1,23 +1,23 @@
 # pebble-wear-face
 
 A Pebble watchface written in C with a PebbleKit JS companion. Shows a
-horizontal `HH:MM` clock baselined at the bottom of the screen with the date
-on the right end. Two columns mirror across the centerline: the right column
-holds the weather widget at the top with the steps badge directly below it,
-and the left column holds the heart rate widget at the same vertical level
-as the steps badge. Configurable via Clay (step goal, dark/light theme,
-bottom bar colors, widget colors).
+horizontal `HH:MM` clock baselined at the bottom of the screen with the
+date on the right end and the current temperature stacked directly above
+the date inside the bottom bar. Two columns mirror across the centerline
+in the upper area: the left column holds the heart rate widget and the
+right column holds the steps badge, both anchored at the top of `content`.
+Configurable via Clay (step goal, dark/light theme, bottom bar colors,
+widget colors).
 
 ## Layout
 
 ```
    +-----------------------+
-   |              [cloud]  |     <- weather: top of the right column
-   |               72°     |
-   |                       |
    |  [heart]   ( [steps] )|     <- HR (left) and steps (right) share a
-   |   72         8,432    |        common top y just below the weather
+   |   72         8,432    |        common top y at the top of content
    |                       |
+   |                       |
+   |                  72°  |     <- temperature, right-aligned, above date
    |  12:34       6 May    |     <- bottom row: time on the left, date on
    +-----------------------+        the right, baselined at content bottom
 ```
@@ -34,13 +34,16 @@ bottom bar colors, widget colors).
   dark/light Theme.
 - Two columns anchor `center_pad = 12px` away from the screen centerline:
   the **left column** (width `left_col_w = 60px`) holds the heart rate
-  widget; the **right column** (mirror of the left) holds the weather
-  widget at the top and the steps badge directly below it.
-- Weather is pinned 4px below `content.top`, full right-column width,
-  centered inside its rect by `weather_widget_update_proc`.
-- Steps and HR share `stack_top_y = weather_top + widget_h + 6px`, so the
-  top of the steps progress circle on the right and the top of the HR icon
-  on the left line up.
+  widget; the **right column** (mirror of the left) holds the steps badge.
+- Steps and HR each vertically center themselves in the band between
+  `content.top` and the top of the bottom bar. Their heights differ (steps
+  is taller because of the progress circle), so they share a vertical
+  midpoint rather than a common top y — visually the icons sit on the same
+  centerline across the screen.
+- Temperature is a right-aligned Gothic 18 Bold `TextLayer` directly above
+  the date, sharing the date's 80px-wide rect inside the bottom bar. Text
+  color is the configurable `WEATHER_COLOR`; the bottom bar fill shows
+  through behind it.
 - The Steps widget has a circular progress border around its icon only: a
   1px gray "track" circle is always visible (when a step goal is set), and
   the filled portion is drawn 5px thick over the track, sweeping the
@@ -69,9 +72,11 @@ bottom bar colors, widget colors).
   `content.right`. Same `BOTTOM_FG_COLOR` as the time.
 
 ### Weather
-- Cloud icon + temperature (e.g. `72°`), centered as a unit above the time
-  pill via a custom `Layer` whose `update_proc` measures text width with
-  `graphics_text_layout_get_content_size` and recenters every refresh.
+- Temperature only (e.g. `72°`), rendered as a right-aligned Gothic 18
+  Bold `TextLayer` directly above the date, inside the bottom bar.
+  The cloud icon was removed; resources `ICON_CLOUD_DARK/LIGHT` are no
+  longer registered (the `.png` files in `resources/icons/` are orphaned
+  and can be deleted).
 - Phone-side fetch from [Open-Meteo](https://open-meteo.com) (no API key
   needed) using `navigator.geolocation`. Triggered once on `Pebble.ready`,
   again whenever the C side sends `REQUEST_WEATHER` (every 30 minutes from
@@ -114,11 +119,9 @@ bottom bar colors, widget colors).
 - On `main_window_load`, the steps and HR widgets cascade in from the left
   via `property_animation_create_layer_frame` with `AnimationCurveEaseOut`:
   steps stack at +200 ms delay, HR stack at +300 ms (each 400 ms).
-- The weather widget is created off-screen (above the screen) and stays
-  hidden until the first `TEMPERATURE` AppMessage arrives — at which point
-  it drops down into place (400 ms `EaseOut`). Subsequent weather refreshes
-  just update the temperature in place; the slide-in only fires once per
-  watchface load (gated by `s_weather_animated`).
+- Weather has no entrance animation — the temperature `TextLayer` shows
+  `...` immediately and is updated in place when the first `TEMPERATURE`
+  AppMessage arrives.
 - Time and date are static. The "second-hand" perimeter animation is
   disabled for now (see the Time section).
 - Helpers: `slide_in_from(layer, from_origin, delay, duration)` snaps the
