@@ -2,9 +2,11 @@
 
 static Window *s_main_window;
 
-static Layer *s_time_box_layer;
-static char s_hour_buffer[4];
-static char s_minute_buffer[4];
+static TextLayer *s_time_layer;
+static char s_time_buffer[8];
+static Layer *s_bottom_bg_layer;
+static GColor s_bottom_bg_color;
+static GColor s_bottom_fg_color;
 
 static TextLayer *s_date_layer;
 static char s_date_buffer[16];
@@ -35,8 +37,6 @@ static bool s_animate_seconds = true;
 
 #define ICON_SIZE 28
 #define ICON_GAP  4
-#define TIME_BOX_H 106
-#define TIME_BOX_W 80
 #define DEFAULT_STEP_GOAL 10000
 
 #define THEME_DARK 0
@@ -89,7 +89,6 @@ static void apply_theme(int theme) {
     }
 
     window_set_background_color(s_main_window, s_color_bg);
-    text_layer_set_text_color(s_date_layer, s_color_time);
     text_layer_set_text_color(s_steps_layer, s_color_steps);
     layer_mark_dirty(window_get_root_layer(s_main_window));
   }
@@ -98,10 +97,9 @@ static void apply_theme(int theme) {
 static void update_time(void) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  strftime(s_hour_buffer, sizeof(s_hour_buffer),
-           clock_is_24h_style() ? "%H" : "%I", t);
-  strftime(s_minute_buffer, sizeof(s_minute_buffer), "%M", t);
-  layer_mark_dirty(s_time_box_layer);
+  strftime(s_time_buffer, sizeof(s_time_buffer),
+           clock_is_24h_style() ? "%H:%M" : "%I:%M", t);
+  text_layer_set_text(s_time_layer, s_time_buffer);
 }
 
 static void update_date(void) {
@@ -318,6 +316,12 @@ static void steps_progress_update_proc(Layer *layer, GContext *ctx) {
   }
 }
 
+static void bottom_bg_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, s_bottom_bg_color);
+  graphics_fill_rect(ctx, b, 8, GCornersTop);
+}
+
 static void update_hr(void) {
   if (!s_hr_available) return;
   HealthValue hr = health_service_peek_current_value(HealthMetricHeartRateBPM);
@@ -329,43 +333,9 @@ static void update_hr(void) {
   text_layer_set_text(s_hr_layer, s_hr_buffer);
 }
 
-static void time_box_update_proc(Layer *layer, GContext *ctx) {
-  GRect bounds = layer_get_bounds(layer);
-  const int border_w = 3;
-  const int corner_r = 10;
-
-  graphics_context_set_fill_color(ctx, s_color_bg);
-  graphics_fill_rect(ctx, bounds, corner_r, GCornersAll);
-
-  GRect path = GRect(bounds.origin.x + 1,
-                     bounds.origin.y + 1,
-                     bounds.size.w - 2,
-                     bounds.size.h - 2);
-  graphics_context_set_stroke_color(ctx, s_color_time);
-  graphics_context_set_stroke_width(ctx, border_w);
-  draw_rounded_rect_border(ctx, path, corner_r, s_border_progress);
-
-  GFont font = fonts_get_system_font(FONT_KEY_ROBOTO_BOLD_SUBSET_49);
-  const int line_h = 52;
-  const int line_offset = 49;
-  const int total_h = line_h + line_offset;
-  const int font_top_pad = 10;
-  const int top = bounds.origin.y + (bounds.size.h - total_h) / 2 - font_top_pad;
-
-  GRect hour_rect = GRect(bounds.origin.x, top, bounds.size.w, line_h);
-  GRect min_rect  = GRect(bounds.origin.x, top + line_offset, bounds.size.w, line_h);
-
-  graphics_context_set_text_color(ctx, s_color_time);
-  graphics_draw_text(ctx, s_hour_buffer, font, hour_rect,
-                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-  graphics_draw_text(ctx, s_minute_buffer, font, min_rect,
-                     GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
-}
-
 static void border_anim_update(Animation *anim, const AnimationProgress dist_normalized) {
   int range = 100 - s_border_anim_start;
   s_border_progress = s_border_anim_start + ((int)dist_normalized * range) / ANIMATION_NORMALIZED_MAX;
-  if (s_time_box_layer) layer_mark_dirty(s_time_box_layer);
 }
 
 static void border_anim_teardown(Animation *anim) {
@@ -397,15 +367,12 @@ static void start_border_animation(void) {
 
 static void apply_animate_seconds(bool enabled) {
   s_animate_seconds = enabled;
-  if (enabled) {
-    start_border_animation();
-  } else {
-    if (s_border_anim) {
-      animation_unschedule(s_border_anim);
-    }
-    s_border_progress = 100;
-    if (s_time_box_layer) layer_mark_dirty(s_time_box_layer);
+  // Border render is disabled for now; preserve the persisted setting but
+  // skip scheduling/unscheduling animations.
+  if (s_border_anim) {
+    animation_unschedule(s_border_anim);
   }
+  s_border_progress = 100;
 }
 
 static void request_weather(void) {
@@ -420,9 +387,6 @@ static void request_weather(void) {
 static void tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   update_time();
   update_date();
-  if (s_animate_seconds) {
-    start_border_animation();
-  }
   if (tick_time->tm_min % 30 == 0) {
     request_weather();
   }
@@ -489,6 +453,21 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     }
     persist_write_bool(MESSAGE_KEY_ANIMATE_SECONDS, enabled);
     apply_animate_seconds(enabled);
+  }
+  Tuple *bg_tuple = dict_find(iter, MESSAGE_KEY_BOTTOM_BG_COLOR);
+  if (bg_tuple) {
+    int hex = (int)bg_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_BOTTOM_BG_COLOR, hex);
+    s_bottom_bg_color = GColorFromHEX(hex);
+    if (s_bottom_bg_layer) layer_mark_dirty(s_bottom_bg_layer);
+  }
+  Tuple *fg_tuple = dict_find(iter, MESSAGE_KEY_BOTTOM_FG_COLOR);
+  if (fg_tuple) {
+    int hex = (int)fg_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_BOTTOM_FG_COLOR, hex);
+    s_bottom_fg_color = GColorFromHEX(hex);
+    if (s_time_layer) text_layer_set_text_color(s_time_layer, s_bottom_fg_color);
+    if (s_date_layer) text_layer_set_text_color(s_date_layer, s_bottom_fg_color);
   }
 }
 
@@ -588,9 +567,10 @@ static void main_window_load(Window *window) {
     s_hr_bmp = load_themed_icon(s_theme, RESOURCE_ID_ICON_HEART_DARK, RESOURCE_ID_ICON_HEART_LIGHT);
   }
 
-  // Two columns inside `content`: a fixed-width widget column on the left
-  // (icon-sized) and the time/date column filling whatever's left on the
-  // right. Edge-anchored so the layout stretches with the screen.
+  // Layout: weather pinned near the top, time + date forming a horizontal
+  // baseline at the bottom of the content area, steps + HR stacked in the
+  // middle band on the left. The bordered "second-progress" time box is
+  // disabled for now.
   const int16_t widget_h = 28;
   const int16_t date_h = 22;
   const int16_t intra_gap = 2;
@@ -603,64 +583,87 @@ static void main_window_load(Window *window) {
   const int16_t steps_value_pad = 4;
   const int16_t steps_stack_h = steps_circle_size + steps_value_pad + widget_h;
   const int16_t hr_stack_h = ICON_SIZE + intra_gap + widget_h;
-  // Anchor both columns `center_pad` px away from the vertical center: the
-  // left column's right edge sits at center_x - 4, the time box at center_x + 4.
-  // If that would push the steps progress pill off the left edge, fall back to
-  // edge-anchor with a 2*center_pad gap.
+
+  // Steps/HR column anchors `center_pad` left of the screen centerline; if
+  // that would push the progress badge off the left edge, fall back to an
+  // edge-anchored layout.
   const int16_t center_x = content.origin.x + content.size.w / 2;
   const int16_t candidate_left_x = center_x - center_pad - left_col_w;
-  int16_t left_x, right_x;
+  int16_t left_x;
   if (candidate_left_x >= total_pad) {
     left_x = candidate_left_x;
-    right_x = center_x + center_pad;
   } else {
     left_x = content.origin.x < total_pad ? total_pad : content.origin.x;
-    right_x = left_x + left_col_w + 2 * center_pad;
   }
-  const int16_t right_col_w = content.origin.x + content.size.w - right_x;
   const int16_t stack_icon_x = left_x + (left_col_w - ICON_SIZE) / 2;
 
-  // Time box — vertically centered in `content`, capped at TIME_BOX_W. Anchored
-  // at right_x so the centered-block layout above stays balanced.
-  const int16_t box_h = TIME_BOX_H;
-  const int16_t box_w = right_col_w < TIME_BOX_W ? right_col_w : TIME_BOX_W;
-  GRect time_rect = GRect(right_x,
-                          content.origin.y + (content.size.h - box_h) / 2,
-                          box_w,
-                          box_h);
-  s_time_box_layer = layer_create(time_rect);
-  layer_set_update_proc(s_time_box_layer, time_box_update_proc);
-  layer_add_child(root, s_time_box_layer);
+  // Bottom row: time (Roboto Bold Subset 49, ~56px line height) on the left,
+  // date (Gothic 18 Bold) on the right, both bottom-anchored to content.
+  // Time rect spans full content width so it doesn't wrap on narrow rect
+  // targets where "12:34" (~130px) approaches content.w; the date overlays
+  // its right edge.
+  const int16_t time_h = 56;
+  const int16_t date_w = 80;
+  const int16_t bottom_row_y = content.origin.y + content.size.h - time_h;
 
-  // Date — directly under the time pill.
-  GRect date_rect = GRect(time_rect.origin.x,
-                          time_rect.origin.y + box_h + 2,
-                          time_rect.size.w,
+  // Bottom bar background — full screen width, from bottom_row_y to the
+  // bottom edge of the screen (bleeds past `content` so it fills the curved
+  // corners on round). Drawn first so time/date render on top.
+  GRect bottom_bg_rect = GRect(0, bottom_row_y, bounds.size.w, bounds.size.h - bottom_row_y);
+  s_bottom_bg_layer = layer_create(bottom_bg_rect);
+  layer_set_update_proc(s_bottom_bg_layer, bottom_bg_update_proc);
+  layer_add_child(root, s_bottom_bg_layer);
+
+  GRect time_rect = GRect(content.origin.x, bottom_row_y, content.size.w, time_h);
+  s_time_layer = text_layer_create(time_rect);
+  text_layer_set_background_color(s_time_layer, GColorClear);
+  text_layer_set_text_color(s_time_layer, s_bottom_fg_color);
+  text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_ROBOTO_BOLD_SUBSET_49));
+  text_layer_set_text_alignment(s_time_layer, GTextAlignmentLeft);
+  layer_add_child(root, text_layer_get_layer(s_time_layer));
+
+  GRect date_rect = GRect(content.origin.x + content.size.w - date_w,
+                          bottom_row_y + (time_h - date_h),
+                          date_w,
                           date_h);
-  s_date_layer = make_text_layer(date_rect, GTextAlignmentCenter, FONT_KEY_GOTHIC_18_BOLD, s_color_time);
+  s_date_layer = make_text_layer(date_rect, GTextAlignmentRight, FONT_KEY_GOTHIC_18_BOLD, s_bottom_fg_color);
   layer_add_child(root, text_layer_get_layer(s_date_layer));
 
-  // Vertical positioning of the left widget column. Group is centered in
-  // `content`. Gap between Steps and HR adapts to the available height so
-  // small displays don't push Steps off the top.
+  // Middle band between the weather row and the time row. Steps + HR get
+  // centered within it; if the group is taller than the band, anchor HR's
+  // bottom to the band edge so the overflow goes upward (into the weather
+  // area) rather than colliding with the time row below.
+  const int16_t middle_top = content.origin.y + widget_h + 6;
+  const int16_t middle_bottom = bottom_row_y - 4;
+  const int16_t middle_band_h = middle_bottom - middle_top;
+
   int16_t widget_gap = 0;
   if (s_hr_available) {
-    int16_t free_h = content.size.h - steps_stack_h - hr_stack_h;
+    int16_t free_h = middle_band_h - steps_stack_h - hr_stack_h;
     widget_gap = free_h / 2;
-    if (widget_gap < 8) widget_gap = 8;
+    if (widget_gap < 4) widget_gap = 4;
     if (widget_gap > 50) widget_gap = 50;
   }
   const int16_t group_h = s_hr_available ? (steps_stack_h + widget_gap + hr_stack_h) : steps_stack_h;
-  const int16_t steps_top_y = content.origin.y + (content.size.h - group_h) / 2;
+  int16_t steps_top_y;
+  if (group_h <= middle_band_h) {
+    steps_top_y = middle_top + (middle_band_h - group_h) / 2;
+  } else {
+    steps_top_y = middle_bottom - group_h;
+  }
   const int16_t hr_y = steps_top_y + steps_stack_h + widget_gap;
 
-  // Weather — anchored just above the time pill.
-  s_weather_target_frame = GRect(time_rect.origin.x,
-                                 time_rect.origin.y - widget_h - 6,
-                                 time_rect.size.w,
+  // Weather — pinned near the top, mirrored to the right column of the
+  // screen (mirror of the left steps/HR column across the centerline).
+  // weather_widget_update_proc centers icon+temp inside the layer's bounds.
+  const int16_t right_col_x = center_x + center_pad;
+  const int16_t right_col_w = content.origin.x + content.size.w - right_col_x;
+  s_weather_target_frame = GRect(right_col_x,
+                                 content.origin.y + 4,
+                                 right_col_w,
                                  widget_h);
-  GRect weather_off = GRect(time_rect.origin.x, -widget_h - 4,
-                            time_rect.size.w, widget_h);
+  GRect weather_off = GRect(right_col_x, -widget_h - 4,
+                            right_col_w, widget_h);
   strcpy(s_weather_buffer, "...");
   s_weather_animated = false;
   s_weather_layer = layer_create(weather_off);
@@ -696,7 +699,8 @@ static void main_window_load(Window *window) {
 }
 
 static void main_window_unload(Window *window) {
-  layer_destroy(s_time_box_layer);
+  text_layer_destroy(s_time_layer);
+  layer_destroy(s_bottom_bg_layer);
   layer_destroy(s_weather_layer);
   layer_destroy(s_steps_progress_layer);
   text_layer_destroy(s_date_layer);
@@ -723,7 +727,14 @@ static void prv_init(void) {
   s_animate_seconds = persist_exists(MESSAGE_KEY_ANIMATE_SECONDS)
       ? persist_read_bool(MESSAGE_KEY_ANIMATE_SECONDS)
       : true;
-  s_border_progress = s_animate_seconds ? 0 : 100;
+  s_border_progress = 100;
+
+  s_bottom_bg_color = persist_exists(MESSAGE_KEY_BOTTOM_BG_COLOR)
+      ? GColorFromHEX(persist_read_int(MESSAGE_KEY_BOTTOM_BG_COLOR))
+      : GColorBlack;
+  s_bottom_fg_color = persist_exists(MESSAGE_KEY_BOTTOM_FG_COLOR)
+      ? GColorFromHEX(persist_read_int(MESSAGE_KEY_BOTTOM_FG_COLOR))
+      : GColorWhite;
 
   s_main_window = window_create();
   window_set_background_color(s_main_window, s_color_bg);
@@ -739,10 +750,6 @@ static void prv_init(void) {
   app_message_register_inbox_received(inbox_received_handler);
   app_message_open(app_message_inbox_size_maximum(),
                    app_message_outbox_size_maximum());
-
-  if (s_animate_seconds) {
-    start_border_animation();
-  }
 
   request_weather();
 }

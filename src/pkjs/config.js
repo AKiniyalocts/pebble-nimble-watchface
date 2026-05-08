@@ -34,6 +34,29 @@ module.exports = [
     "items": [
       {
         "type": "heading",
+        "defaultValue": "Bottom Bar"
+      },
+      {
+        "type": "color",
+        "messageKey": "BOTTOM_BG_COLOR",
+        "label": "Background color",
+        "defaultValue": "0x000000",
+        "sunlight": false
+      },
+      {
+        "type": "color",
+        "messageKey": "BOTTOM_FG_COLOR",
+        "label": "Text color",
+        "defaultValue": "0xFFFFFF",
+        "sunlight": false
+      }
+    ]
+  },
+  {
+    "type": "section",
+    "items": [
+      {
+        "type": "heading",
         "defaultValue": "Activity"
       },
       {

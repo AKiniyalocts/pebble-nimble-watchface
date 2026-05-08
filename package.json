@@ -30,7 +30,9 @@
       "CONDITIONS",
       "STEP_GOAL",
       "THEME",
-      "ANIMATE_SECONDS"
+      "ANIMATE_SECONDS",
+      "BOTTOM_BG_COLOR",
+      "BOTTOM_FG_COLOR"
     ],
     "resources": {
       "media": [
