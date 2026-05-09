@@ -742,24 +742,26 @@ static void main_window_load(Window *window) {
   layer_add_child(root, text_layer_get_layer(s_time_layer));
 
   const int16_t right_pad = 4;
-  GRect date_rect = GRect(content.origin.x + content.size.w - date_w - right_pad,
-                          bottom_row_y + (time_h - date_h),
-                          date_w,
-                          date_h);
-  s_date_layer = make_text_layer(date_rect, GTextAlignmentRight, FONT_KEY_GOTHIC_18_BOLD, s_bottom_fg_color);
-  layer_add_child(root, text_layer_get_layer(s_date_layer));
+  // Day above month, both center-aligned in a shared 36px-wide column at the
+  // right end of the bottom bar. Day uses the bigger bold gothic; month uses
+  // Roboto Condensed (the only Roboto font with letters in the SDK).
+  const int16_t date_col_w = 36;
+  const int16_t date_day_h = 28;
+  const int16_t date_month_h = 22;
 
-  // Day-of-month — stacked above the month text, GOTHIC_28_BOLD, center-
-  // aligned in a narrow rect that shares the month rect's right edge so the
-  // digit sits roughly above the month text's center.
-  const int16_t day_w = 30;
-  const int16_t day_h = 28;
-  GRect date_day_rect = GRect(content.origin.x + content.size.w - day_w - right_pad,
+  GRect date_day_rect = GRect(content.origin.x + content.size.w - date_col_w - right_pad,
                               bottom_row_y,
-                              day_w,
-                              day_h);
+                              date_col_w,
+                              date_day_h);
   s_date_day_layer = make_text_layer(date_day_rect, GTextAlignmentCenter, FONT_KEY_GOTHIC_28_BOLD, s_bottom_fg_color);
   layer_add_child(root, text_layer_get_layer(s_date_day_layer));
+
+  GRect date_rect = GRect(content.origin.x + content.size.w - date_col_w - right_pad,
+                          bottom_row_y + date_day_h,
+                          date_col_w,
+                          date_month_h);
+  s_date_layer = make_text_layer(date_rect, GTextAlignmentCenter, FONT_KEY_ROBOTO_CONDENSED_21, s_bottom_fg_color);
+  layer_add_child(root, text_layer_get_layer(s_date_layer));
 
   // Temperature — moved into the new top bar, right-end-anchored with right-
   // aligned text (mirrors how the date sits at the right end of the bottom).
