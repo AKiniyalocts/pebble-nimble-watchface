@@ -14,6 +14,8 @@ static GColor s_top_bar_fg_color;
 
 static TextLayer *s_date_layer;
 static char s_date_buffer[16];
+static TextLayer *s_date_day_layer;
+static char s_date_day_buffer[4];
 
 static TextLayer *s_weather_layer;
 static char s_weather_buffer[32];
@@ -136,10 +138,10 @@ static void update_time(void) {
 static void update_date(void) {
   time_t now = time(NULL);
   struct tm *t = localtime(&now);
-  char month[4];
-  strftime(month, sizeof(month), "%b", t);
-  snprintf(s_date_buffer, sizeof(s_date_buffer), "%d %s", t->tm_mday, month);
-  text_layer_set_text(s_date_layer, s_date_buffer);
+  snprintf(s_date_day_buffer, sizeof(s_date_day_buffer), "%d", t->tm_mday);
+  strftime(s_date_buffer, sizeof(s_date_buffer), "%b", t);
+  if (s_date_day_layer) text_layer_set_text(s_date_day_layer, s_date_day_buffer);
+  if (s_date_layer) text_layer_set_text(s_date_layer, s_date_buffer);
 }
 
 static void format_steps(int steps, char *out, size_t out_size) {
@@ -557,6 +559,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     s_bottom_fg_color = GColorFromHEX(hex);
     if (s_time_layer) text_layer_set_text_color(s_time_layer, s_bottom_fg_color);
     if (s_date_layer) text_layer_set_text_color(s_date_layer, s_bottom_fg_color);
+    if (s_date_day_layer) text_layer_set_text_color(s_date_day_layer, s_bottom_fg_color);
   }
   Tuple *top_bar_bg_tuple = dict_find(iter, MESSAGE_KEY_TOP_BAR_BG_COLOR);
   if (top_bar_bg_tuple) {
@@ -746,6 +749,18 @@ static void main_window_load(Window *window) {
   s_date_layer = make_text_layer(date_rect, GTextAlignmentRight, FONT_KEY_GOTHIC_18_BOLD, s_bottom_fg_color);
   layer_add_child(root, text_layer_get_layer(s_date_layer));
 
+  // Day-of-month — stacked above the month text, GOTHIC_28_BOLD, center-
+  // aligned in a narrow rect that shares the month rect's right edge so the
+  // digit sits roughly above the month text's center.
+  const int16_t day_w = 30;
+  const int16_t day_h = 28;
+  GRect date_day_rect = GRect(content.origin.x + content.size.w - day_w - right_pad,
+                              bottom_row_y,
+                              day_w,
+                              day_h);
+  s_date_day_layer = make_text_layer(date_day_rect, GTextAlignmentCenter, FONT_KEY_GOTHIC_28_BOLD, s_bottom_fg_color);
+  layer_add_child(root, text_layer_get_layer(s_date_day_layer));
+
   // Temperature — moved into the new top bar, right-end-anchored with right-
   // aligned text (mirrors how the date sits at the right end of the bottom).
   GRect weather_rect = GRect(content.origin.x + content.size.w - date_w - right_pad,
@@ -833,6 +848,7 @@ static void main_window_unload(Window *window) {
   layer_destroy(s_bottom_bg_layer);
   layer_destroy(s_steps_progress_layer);
   text_layer_destroy(s_date_layer);
+  text_layer_destroy(s_date_day_layer);
   text_layer_destroy(s_steps_layer);
   bitmap_layer_destroy(s_steps_bmp_layer);
   gbitmap_destroy(s_steps_bmp);
