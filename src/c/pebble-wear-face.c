@@ -5,14 +5,23 @@ static Window *s_main_window;
 static TextLayer *s_time_layer;
 static char s_time_buffer[8];
 static Layer *s_bottom_bg_layer;
+static Layer *s_top_bg_layer;
 static GColor s_bottom_bg_color;
 static GColor s_bottom_fg_color;
+static GColor s_top_bg_color;
+static GColor s_top_bar_bg_color;
+static GColor s_top_bar_fg_color;
 
 static TextLayer *s_date_layer;
 static char s_date_buffer[16];
 
 static TextLayer *s_weather_layer;
 static char s_weather_buffer[32];
+
+static Layer *s_battery_icon_layer;
+static TextLayer *s_battery_text_layer;
+static char s_battery_buffer[8];
+static BatteryChargeState s_battery_state;
 
 static TextLayer *s_steps_layer;
 static char s_steps_buffer[16];
@@ -85,9 +94,18 @@ static void apply_user_widget_colors(void) {
   }
 }
 
+// Top-area background — defaults to the theme bg, overridden by the user's
+// Clay color pick once persisted.
+static void resolve_top_bg(void) {
+  s_top_bg_color = persist_exists(MESSAGE_KEY_TOP_BG_COLOR)
+      ? GColorFromHEX(persist_read_int(MESSAGE_KEY_TOP_BG_COLOR))
+      : s_color_bg;
+}
+
 static void apply_theme(int theme) {
   compute_theme_colors(theme);
   apply_user_widget_colors();
+  resolve_top_bg();
   if (s_main_window) {
     gbitmap_destroy(s_steps_bmp);
     s_steps_bmp = load_themed_icon(theme, RESOURCE_ID_ICON_STEPS_DARK, RESOURCE_ID_ICON_STEPS_LIGHT);
@@ -100,7 +118,7 @@ static void apply_theme(int theme) {
       text_layer_set_text_color(s_hr_layer, s_color_hr);
     }
 
-    window_set_background_color(s_main_window, s_color_bg);
+    window_set_background_color(s_main_window, s_top_bg_color);
     text_layer_set_text_color(s_steps_layer, s_color_steps);
     text_layer_set_text_color(s_weather_layer, s_color_weather);
     layer_mark_dirty(window_get_root_layer(s_main_window));
@@ -335,6 +353,48 @@ static void bottom_bg_update_proc(Layer *layer, GContext *ctx) {
   graphics_fill_rect(ctx, b, 8, GCornersTop);
 }
 
+static void top_bg_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  graphics_context_set_fill_color(ctx, s_top_bar_bg_color);
+  graphics_fill_rect(ctx, b, 8, GCornersBottom);
+}
+
+static void battery_icon_update_proc(Layer *layer, GContext *ctx) {
+  GRect b = layer_get_bounds(layer);
+  const int body_w = 20;
+  const int body_h = 11;
+  const int term_w = 2;
+  const int term_h = 5;
+  const int body_x = b.origin.x;
+  const int body_y = b.origin.y + (b.size.h - body_h) / 2;
+  const int term_x = body_x + body_w;
+  const int term_y = b.origin.y + (b.size.h - term_h) / 2;
+
+  graphics_context_set_stroke_color(ctx, s_top_bar_fg_color);
+  graphics_context_set_fill_color(ctx, s_top_bar_fg_color);
+  graphics_draw_rect(ctx, GRect(body_x, body_y, body_w, body_h));
+  graphics_fill_rect(ctx, GRect(term_x, term_y, term_w, term_h), 0, GCornerNone);
+
+  int pct = s_battery_state.charge_percent;
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  int fill_w = ((body_w - 4) * pct) / 100;
+  if (fill_w > 0) {
+    graphics_fill_rect(ctx, GRect(body_x + 2, body_y + 2, fill_w, body_h - 4), 0, GCornerNone);
+  }
+}
+
+static void update_battery(BatteryChargeState charge_state) {
+  s_battery_state = charge_state;
+  if (charge_state.is_charging) {
+    snprintf(s_battery_buffer, sizeof(s_battery_buffer), "%d%%+", charge_state.charge_percent);
+  } else {
+    snprintf(s_battery_buffer, sizeof(s_battery_buffer), "%d%%", charge_state.charge_percent);
+  }
+  if (s_battery_text_layer) text_layer_set_text(s_battery_text_layer, s_battery_buffer);
+  if (s_battery_icon_layer) layer_mark_dirty(s_battery_icon_layer);
+}
+
 static void update_hr(void) {
   if (!s_hr_available) return;
   HealthValue hr = health_service_peek_current_value(HealthMetricHeartRateBPM);
@@ -473,6 +533,16 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     persist_write_bool(MESSAGE_KEY_ANIMATE_SECONDS, enabled);
     apply_animate_seconds(enabled);
   }
+  Tuple *top_bg_tuple = dict_find(iter, MESSAGE_KEY_TOP_BG_COLOR);
+  if (top_bg_tuple) {
+    int hex = (int)top_bg_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_TOP_BG_COLOR, hex);
+    s_top_bg_color = GColorFromHEX(hex);
+    if (s_main_window) {
+      window_set_background_color(s_main_window, s_top_bg_color);
+      layer_mark_dirty(window_get_root_layer(s_main_window));
+    }
+  }
   Tuple *bg_tuple = dict_find(iter, MESSAGE_KEY_BOTTOM_BG_COLOR);
   if (bg_tuple) {
     int hex = (int)bg_tuple->value->int32;
@@ -487,6 +557,21 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     s_bottom_fg_color = GColorFromHEX(hex);
     if (s_time_layer) text_layer_set_text_color(s_time_layer, s_bottom_fg_color);
     if (s_date_layer) text_layer_set_text_color(s_date_layer, s_bottom_fg_color);
+  }
+  Tuple *top_bar_bg_tuple = dict_find(iter, MESSAGE_KEY_TOP_BAR_BG_COLOR);
+  if (top_bar_bg_tuple) {
+    int hex = (int)top_bar_bg_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_TOP_BAR_BG_COLOR, hex);
+    s_top_bar_bg_color = GColorFromHEX(hex);
+    if (s_top_bg_layer) layer_mark_dirty(s_top_bg_layer);
+  }
+  Tuple *top_bar_fg_tuple = dict_find(iter, MESSAGE_KEY_TOP_BAR_FG_COLOR);
+  if (top_bar_fg_tuple) {
+    int hex = (int)top_bar_fg_tuple->value->int32;
+    persist_write_int(MESSAGE_KEY_TOP_BAR_FG_COLOR, hex);
+    s_top_bar_fg_color = GColorFromHEX(hex);
+    if (s_battery_text_layer) text_layer_set_text_color(s_battery_text_layer, s_top_bar_fg_color);
+    if (s_battery_icon_layer) layer_mark_dirty(s_battery_icon_layer);
   }
   Tuple *weather_tuple = dict_find(iter, MESSAGE_KEY_WEATHER_COLOR);
   if (weather_tuple) {
@@ -620,14 +705,22 @@ static void main_window_load(Window *window) {
   const int16_t right_col_w = content.origin.x + content.size.w - right_col_x;
   const int16_t right_stack_icon_x = right_col_x + (right_col_w - ICON_SIZE) / 2;
 
-  // Bottom row: time (Roboto Bold Subset 49, ~56px line height) on the left,
+  // Bottom row: time (Bitham 42 Bold, ~48px line height) on the left,
   // date (Gothic 18 Bold) on the right, both bottom-anchored to content.
   // Time rect spans full content width so it doesn't wrap on narrow rect
-  // targets where "12:34" (~130px) approaches content.w; the date overlays
-  // its right edge.
-  const int16_t time_h = 56;
+  // targets; the date overlays its right edge.
+  const int16_t time_h = 48;
   const int16_t date_w = 80;
   const int16_t bottom_row_y = content.origin.y + content.size.h - time_h;
+  const int16_t top_bar_h = content.origin.y + date_h + 4;
+
+  // Top bar background — mirror of the bottom bar, with rounded BOTTOM
+  // corners. Full screen width so it bleeds past `content` to fill the round
+  // corners. Drawn first so weather text renders on top.
+  GRect top_bg_rect = GRect(0, 0, bounds.size.w, top_bar_h);
+  s_top_bg_layer = layer_create(top_bg_rect);
+  layer_set_update_proc(s_top_bg_layer, top_bg_update_proc);
+  layer_add_child(root, s_top_bg_layer);
 
   // Bottom bar background — full screen width, from bottom_row_y to the
   // bottom edge of the screen (bleeds past `content` so it fills the curved
@@ -641,21 +734,22 @@ static void main_window_load(Window *window) {
   s_time_layer = text_layer_create(time_rect);
   text_layer_set_background_color(s_time_layer, GColorClear);
   text_layer_set_text_color(s_time_layer, s_bottom_fg_color);
-  text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_ROBOTO_BOLD_SUBSET_49));
+  text_layer_set_font(s_time_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_time_layer, GTextAlignmentLeft);
   layer_add_child(root, text_layer_get_layer(s_time_layer));
 
-  GRect date_rect = GRect(content.origin.x + content.size.w - date_w,
+  const int16_t right_pad = 4;
+  GRect date_rect = GRect(content.origin.x + content.size.w - date_w - right_pad,
                           bottom_row_y + (time_h - date_h),
                           date_w,
                           date_h);
   s_date_layer = make_text_layer(date_rect, GTextAlignmentRight, FONT_KEY_GOTHIC_18_BOLD, s_bottom_fg_color);
   layer_add_child(root, text_layer_get_layer(s_date_layer));
 
-  // Temperature — right-aligned, directly above the date inside the bottom
-  // bar. Same width and font sizing as the date so the two read as a stack.
-  GRect weather_rect = GRect(date_rect.origin.x,
-                             date_rect.origin.y - date_h,
+  // Temperature — moved into the new top bar, right-end-anchored with right-
+  // aligned text (mirrors how the date sits at the right end of the bottom).
+  GRect weather_rect = GRect(content.origin.x + content.size.w - date_w - right_pad,
+                             content.origin.y,
                              date_w,
                              date_h);
   strcpy(s_weather_buffer, "...");
@@ -667,13 +761,36 @@ static void main_window_load(Window *window) {
   text_layer_set_text(s_weather_layer, s_weather_buffer);
   layer_add_child(root, text_layer_get_layer(s_weather_layer));
 
+  // Battery — left side of the top bar, 4px in from content's left edge.
+  // Custom-drawn icon (body + terminal nub + fill) followed by "NN%" text.
+  const int16_t battery_left_pad = 4;
+  const int16_t battery_icon_w = 24;
+  const int16_t battery_icon_gap = 4;
+  const int16_t battery_text_w = 44;
+  GRect battery_icon_rect = GRect(content.origin.x + battery_left_pad,
+                                  content.origin.y,
+                                  battery_icon_w,
+                                  date_h);
+  s_battery_icon_layer = layer_create(battery_icon_rect);
+  layer_set_update_proc(s_battery_icon_layer, battery_icon_update_proc);
+  layer_add_child(root, s_battery_icon_layer);
+
+  GRect battery_text_rect = GRect(battery_icon_rect.origin.x + battery_icon_w + battery_icon_gap,
+                                  content.origin.y,
+                                  battery_text_w,
+                                  date_h);
+  s_battery_text_layer = make_text_layer(battery_text_rect, GTextAlignmentLeft,
+                                         FONT_KEY_GOTHIC_18_BOLD, s_top_bar_fg_color);
+  layer_add_child(root, text_layer_get_layer(s_battery_text_layer));
+
   // HR (left) and steps (right) each vertically center themselves in the
-  // available space between `content.top` and the top of the bottom bar.
-  // They have different heights (steps stack is taller because of the
-  // progress circle), so they share a vertical midpoint rather than a top.
+  // available space between the bottom of the top bar and the top of the
+  // bottom bar. They have different heights (steps stack is taller because
+  // of the progress circle), so they share a vertical midpoint rather than
+  // a top.
   const int16_t steps_stack_h = steps_circle_size + steps_value_pad + widget_h;
   const int16_t hr_stack_h = ICON_SIZE + intra_gap + widget_h;
-  const int16_t avail_top = content.origin.y;
+  const int16_t avail_top = top_bar_h;
   const int16_t avail_h = bottom_row_y - avail_top;
   const int16_t stack_top_y = avail_top + (avail_h - steps_stack_h) / 2;
   const int16_t hr_y = avail_top + (avail_h - hr_stack_h) / 2;
@@ -702,6 +819,7 @@ static void main_window_load(Window *window) {
   update_date();
   update_steps();
   update_hr();
+  update_battery(battery_state_service_peek());
 
   run_entrance_animations();
 }
@@ -709,6 +827,9 @@ static void main_window_load(Window *window) {
 static void main_window_unload(Window *window) {
   text_layer_destroy(s_time_layer);
   text_layer_destroy(s_weather_layer);
+  text_layer_destroy(s_battery_text_layer);
+  layer_destroy(s_battery_icon_layer);
+  layer_destroy(s_top_bg_layer);
   layer_destroy(s_bottom_bg_layer);
   layer_destroy(s_steps_progress_layer);
   text_layer_destroy(s_date_layer);
@@ -731,6 +852,7 @@ static void prv_init(void) {
   int saved_theme = persist_read_int(MESSAGE_KEY_THEME);
   compute_theme_colors(saved_theme == THEME_LIGHT ? THEME_LIGHT : THEME_DARK);
   apply_user_widget_colors();
+  resolve_top_bg();
 
   s_animate_seconds = persist_exists(MESSAGE_KEY_ANIMATE_SECONDS)
       ? persist_read_bool(MESSAGE_KEY_ANIMATE_SECONDS)
@@ -743,9 +865,15 @@ static void prv_init(void) {
   s_bottom_fg_color = persist_exists(MESSAGE_KEY_BOTTOM_FG_COLOR)
       ? GColorFromHEX(persist_read_int(MESSAGE_KEY_BOTTOM_FG_COLOR))
       : GColorWhite;
+  s_top_bar_bg_color = persist_exists(MESSAGE_KEY_TOP_BAR_BG_COLOR)
+      ? GColorFromHEX(persist_read_int(MESSAGE_KEY_TOP_BAR_BG_COLOR))
+      : GColorBlack;
+  s_top_bar_fg_color = persist_exists(MESSAGE_KEY_TOP_BAR_FG_COLOR)
+      ? GColorFromHEX(persist_read_int(MESSAGE_KEY_TOP_BAR_FG_COLOR))
+      : GColorWhite;
 
   s_main_window = window_create();
-  window_set_background_color(s_main_window, s_color_bg);
+  window_set_background_color(s_main_window, s_top_bg_color);
   window_set_window_handlers(s_main_window, (WindowHandlers) {
     .load = main_window_load,
     .unload = main_window_unload,
@@ -754,6 +882,7 @@ static void prv_init(void) {
 
   tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
   health_service_events_subscribe(health_handler, NULL);
+  battery_state_service_subscribe(update_battery);
   unobstructed_area_service_subscribe(
       (UnobstructedAreaHandlers){ .did_change = unobstructed_did_change },
       NULL);
@@ -771,6 +900,7 @@ static void prv_init(void) {
 static void prv_deinit(void) {
   tick_timer_service_unsubscribe();
   health_service_events_unsubscribe();
+  battery_state_service_unsubscribe();
   unobstructed_area_service_unsubscribe();
   if (s_border_anim) {
     animation_unschedule(s_border_anim);
